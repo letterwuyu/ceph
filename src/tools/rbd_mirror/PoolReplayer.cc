@@ -276,7 +276,7 @@ void PoolReplayer<I>::init()
   m_stopping = false;
   m_blacklisted = false;
 
-  dout(20) << "replaying for " << m_peer << dendl;
+  dout(10) << "replaying for " << m_peer << dendl;
   int r = init_rados(g_ceph_context->_conf->cluster,
                      g_ceph_context->_conf->name.to_str(),
                      "local cluster", &m_local_rados, false);
@@ -327,7 +327,7 @@ void PoolReplayer<I>::init()
     return;
   }
 
-  dout(20) << "connected to " << m_peer << dendl;
+  dout(10) << "connected to " << m_peer << dendl;
 
   m_instance_replayer.reset(InstanceReplayer<>::create(
     m_threads, m_service_daemon, m_local_rados, local_mirror_uuid,
@@ -377,16 +377,17 @@ void PoolReplayer<I>::shut_down() {
   }
   if (m_leader_watcher) {
     m_leader_watcher->shut_down();
-    m_leader_watcher.reset();
   }
   if (m_instance_watcher) {
     m_instance_watcher->shut_down();
-    m_instance_watcher.reset();
   }
   if (m_instance_replayer) {
     m_instance_replayer->shut_down();
-    m_instance_replayer.reset();
   }
+
+  m_leader_watcher.reset();
+  m_instance_watcher.reset();
+  m_instance_replayer.reset();
 
   assert(!m_image_map);
   assert(!m_image_deleter);
@@ -419,7 +420,7 @@ int PoolReplayer<I>::init_rados(const std::string &cluster_name,
   cct->_conf->cluster = cluster_name;
 
   // librados::Rados::conf_read_file
-  int r = cct->_conf->parse_config_files(nullptr, nullptr, 0);
+  int r = cct->_conf.parse_config_files(nullptr, nullptr, 0);
   if (r < 0) {
     derr << "could not read ceph conf for " << description << ": "
 	 << cpp_strerror(r) << dendl;
@@ -434,27 +435,27 @@ int PoolReplayer<I>::init_rados(const std::string &cluster_name,
     // remote peer connections shouldn't apply cluster-specific
     // configuration settings
     for (auto& key : UNIQUE_PEER_CONFIG_KEYS) {
-      config_values[key] = cct->_conf->get_val<std::string>(key);
+      config_values[key] = cct->_conf.get_val<std::string>(key);
     }
   }
 
-  cct->_conf->parse_env();
+  cct->_conf.parse_env();
 
   // librados::Rados::conf_parse_env
   std::vector<const char*> args;
-  r = cct->_conf->parse_argv(args);
+  r = cct->_conf.parse_argv(args);
   if (r < 0) {
     derr << "could not parse environment for " << description << ":"
          << cpp_strerror(r) << dendl;
     cct->put();
     return r;
   }
-  cct->_conf->parse_env();
+  cct->_conf.parse_env();
 
   if (!m_args.empty()) {
     // librados::Rados::conf_parse_argv
     args = m_args;
-    r = cct->_conf->parse_argv(args);
+    r = cct->_conf.parse_argv(args);
     if (r < 0) {
       derr << "could not parse command line args for " << description << ": "
 	   << cpp_strerror(r) << dendl;
@@ -467,25 +468,25 @@ int PoolReplayer<I>::init_rados(const std::string &cluster_name,
     // remote peer connections shouldn't apply cluster-specific
     // configuration settings
     for (auto& pair : config_values) {
-      auto value = cct->_conf->get_val<std::string>(pair.first);
+      auto value = cct->_conf.get_val<std::string>(pair.first);
       if (pair.second != value) {
         dout(0) << "reverting global config option override: "
                 << pair.first << ": " << value << " -> " << pair.second
                 << dendl;
-        cct->_conf->set_val_or_die(pair.first, pair.second);
+        cct->_conf.set_val_or_die(pair.first, pair.second);
       }
     }
   }
 
   if (!g_ceph_context->_conf->admin_socket.empty()) {
-    cct->_conf->set_val_or_die("admin_socket",
+    cct->_conf.set_val_or_die("admin_socket",
                                "$run_dir/$name.$pid.$cluster.$cctid.asok");
   }
 
   // disable unnecessary librbd cache
-  cct->_conf->set_val_or_die("rbd_cache", "false");
-  cct->_conf->apply_changes(nullptr);
-  cct->_conf->complain_about_parse_errors(cct);
+  cct->_conf.set_val_or_die("rbd_cache", "false");
+  cct->_conf.apply_changes(nullptr);
+  cct->_conf.complain_about_parse_errors(cct);
 
   r = (*rados_ref)->init_with_context(cct);
   assert(r == 0);
@@ -529,6 +530,8 @@ void PoolReplayer<I>::run()
       m_cond.WaitInterval(m_lock, utime_t(1, 0));
     }
   }
+
+  m_instance_replayer->stop();
 }
 
 template <typename I>
@@ -547,6 +550,14 @@ void PoolReplayer<I>::print_status(Formatter *f, stringstream *ss)
   f->dump_stream("peer") << m_peer;
   f->dump_string("instance_id", m_instance_watcher->get_instance_id());
 
+  std::string state("running");
+  if (m_manual_stop) {
+    state = "stopped (manual)";
+  } else if (m_stopping) {
+    state = "stopped";
+  }
+  f->dump_string("state", state);
+
   std::string leader_instance_id;
   m_leader_watcher->get_leader_instance_id(&leader_instance_id);
   f->dump_string("leader_instance_id", leader_instance_id);
@@ -564,10 +575,10 @@ void PoolReplayer<I>::print_status(Formatter *f, stringstream *ss)
   }
 
   f->dump_string("local_cluster_admin_socket",
-                 reinterpret_cast<CephContext *>(m_local_io_ctx.cct())->_conf->
+                 reinterpret_cast<CephContext *>(m_local_io_ctx.cct())->_conf.
                      get_val<std::string>("admin_socket"));
   f->dump_string("remote_cluster_admin_socket",
-                 reinterpret_cast<CephContext *>(m_remote_io_ctx.cct())->_conf->
+                 reinterpret_cast<CephContext *>(m_remote_io_ctx.cct())->_conf.
                      get_val<std::string>("admin_socket"));
 
   f->open_object_section("sync_throttler");
@@ -597,6 +608,7 @@ void PoolReplayer<I>::start()
     return;
   }
 
+  m_manual_stop = false;
   m_instance_replayer->start();
 }
 
@@ -614,6 +626,7 @@ void PoolReplayer<I>::stop(bool manual)
     return;
   }
 
+  m_manual_stop = true;
   m_instance_replayer->stop();
 }
 
@@ -701,7 +714,7 @@ void PoolReplayer<I>::handle_update(const std::string &mirror_uuid,
 
 template <typename I>
 void PoolReplayer<I>::handle_post_acquire_leader(Context *on_finish) {
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   m_service_daemon->add_or_update_attribute(m_local_pool_id,
                                             SERVICE_DAEMON_LEADER_KEY, true);
@@ -711,7 +724,7 @@ void PoolReplayer<I>::handle_post_acquire_leader(Context *on_finish) {
 
 template <typename I>
 void PoolReplayer<I>::handle_pre_release_leader(Context *on_finish) {
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   m_service_daemon->remove_attribute(m_local_pool_id,
                                      SERVICE_DAEMON_LEADER_KEY);
@@ -726,6 +739,7 @@ void PoolReplayer<I>::init_image_map(Context *on_finish) {
   Mutex::Locker locker(m_lock);
   assert(!m_image_map);
   m_image_map.reset(ImageMap<I>::create(m_local_io_ctx, m_threads,
+                                        m_instance_watcher->get_instance_id(),
                                         m_image_map_listener));
 
   auto ctx = new FunctionContext([this, on_finish](int r) {
@@ -740,7 +754,7 @@ void PoolReplayer<I>::handle_init_image_map(int r, Context *on_finish) {
   dout(5) << "r=" << r << dendl;
   if (r < 0) {
     derr << "failed to init image map: " << cpp_strerror(r) << dendl;
-    on_finish = new FunctionContext([this, on_finish, r](int) {
+    on_finish = new FunctionContext([on_finish, r](int) {
         on_finish->complete(r);
       });
     shut_down_image_map(on_finish);
@@ -752,7 +766,7 @@ void PoolReplayer<I>::handle_init_image_map(int r, Context *on_finish) {
 
 template <typename I>
 void PoolReplayer<I>::init_local_pool_watcher(Context *on_finish) {
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   Mutex::Locker locker(m_lock);
   assert(!m_local_pool_watcher);
@@ -771,10 +785,10 @@ void PoolReplayer<I>::init_local_pool_watcher(Context *on_finish) {
 template <typename I>
 void PoolReplayer<I>::handle_init_local_pool_watcher(
     int r, Context *on_finish) {
-  dout(20) << "r=" << r << dendl;
+  dout(10) << "r=" << r << dendl;
   if (r < 0) {
     derr << "failed to retrieve local images: " << cpp_strerror(r) << dendl;
-    on_finish = new FunctionContext([this, on_finish, r](int) {
+    on_finish = new FunctionContext([on_finish, r](int) {
         on_finish->complete(r);
       });
     shut_down_pool_watchers(on_finish);
@@ -786,7 +800,7 @@ void PoolReplayer<I>::handle_init_local_pool_watcher(
 
 template <typename I>
 void PoolReplayer<I>::init_remote_pool_watcher(Context *on_finish) {
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   Mutex::Locker locker(m_lock);
   assert(!m_remote_pool_watcher);
@@ -803,10 +817,10 @@ void PoolReplayer<I>::init_remote_pool_watcher(Context *on_finish) {
 template <typename I>
 void PoolReplayer<I>::handle_init_remote_pool_watcher(
     int r, Context *on_finish) {
-  dout(20) << "r=" << r << dendl;
+  dout(10) << "r=" << r << dendl;
   if (r < 0) {
     derr << "failed to retrieve remote images: " << cpp_strerror(r) << dendl;
-    on_finish = new FunctionContext([this, on_finish, r](int) {
+    on_finish = new FunctionContext([on_finish, r](int) {
         on_finish->complete(r);
       });
     shut_down_pool_watchers(on_finish);
@@ -818,7 +832,7 @@ void PoolReplayer<I>::handle_init_remote_pool_watcher(
 
 template <typename I>
 void PoolReplayer<I>::init_image_deleter(Context *on_finish) {
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   Mutex::Locker locker(m_lock);
   assert(!m_image_deleter);
@@ -834,10 +848,10 @@ void PoolReplayer<I>::init_image_deleter(Context *on_finish) {
 
 template <typename I>
 void PoolReplayer<I>::handle_init_image_deleter(int r, Context *on_finish) {
-  dout(20) << "r=" << r << dendl;
+  dout(10) << "r=" << r << dendl;
   if (r < 0) {
     derr << "failed to init image deleter: " << cpp_strerror(r) << dendl;
-    on_finish = new FunctionContext([this, on_finish, r](int) {
+    on_finish = new FunctionContext([on_finish, r](int) {
         on_finish->complete(r);
       });
     shut_down_image_deleter(on_finish);
@@ -852,7 +866,7 @@ void PoolReplayer<I>::handle_init_image_deleter(int r, Context *on_finish) {
 
 template <typename I>
 void PoolReplayer<I>::shut_down_image_deleter(Context* on_finish) {
-  dout(20) << dendl;
+  dout(10) << dendl;
   {
     Mutex::Locker locker(m_lock);
     if (m_image_deleter) {
@@ -871,7 +885,7 @@ void PoolReplayer<I>::shut_down_image_deleter(Context* on_finish) {
 template <typename I>
 void PoolReplayer<I>::handle_shut_down_image_deleter(
     int r, Context* on_finish) {
-  dout(20) << "r=" << r << dendl;
+  dout(10) << "r=" << r << dendl;
 
   {
     Mutex::Locker locker(m_lock);
@@ -884,7 +898,7 @@ void PoolReplayer<I>::handle_shut_down_image_deleter(
 
 template <typename I>
 void PoolReplayer<I>::shut_down_pool_watchers(Context *on_finish) {
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   {
     Mutex::Locker locker(m_lock);
@@ -910,7 +924,7 @@ void PoolReplayer<I>::shut_down_pool_watchers(Context *on_finish) {
 template <typename I>
 void PoolReplayer<I>::handle_shut_down_pool_watchers(
     int r, Context *on_finish) {
-  dout(20) << "r=" << r << dendl;
+  dout(10) << "r=" << r << dendl;
 
   {
     Mutex::Locker locker(m_lock);
@@ -926,7 +940,7 @@ void PoolReplayer<I>::handle_shut_down_pool_watchers(
 
 template <typename I>
 void PoolReplayer<I>::wait_for_update_ops(Context *on_finish) {
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   Mutex::Locker locker(m_lock);
 
@@ -940,7 +954,7 @@ void PoolReplayer<I>::wait_for_update_ops(Context *on_finish) {
 
 template <typename I>
 void PoolReplayer<I>::handle_wait_for_update_ops(int r, Context *on_finish) {
-  dout(20) << "r=" << r << dendl;
+  dout(10) << "r=" << r << dendl;
   assert(r == 0);
 
   shut_down_image_map(on_finish);
@@ -982,7 +996,7 @@ void PoolReplayer<I>::handle_shut_down_image_map(int r, Context *on_finish) {
 template <typename I>
 void PoolReplayer<I>::handle_update_leader(
     const std::string &leader_instance_id) {
-  dout(20) << "leader_instance_id=" << leader_instance_id << dendl;
+  dout(10) << "leader_instance_id=" << leader_instance_id << dendl;
 
   m_instance_watcher->handle_update_leader(leader_instance_id);
 }
@@ -1026,17 +1040,26 @@ void PoolReplayer<I>::handle_remove_image(const std::string &mirror_uuid,
 template <typename I>
 void PoolReplayer<I>::handle_instances_added(const InstanceIds &instance_ids) {
   dout(5) << "instance_ids=" << instance_ids << dendl;
+  Mutex::Locker locker(m_lock);
+  if (!m_leader_watcher->is_leader()) {
+    return;
+  }
 
-  // TODO only register ourselves for now
-  auto instance_id = m_instance_watcher->get_instance_id();
-  m_image_map->update_instances_added({instance_id});
+  assert(m_image_map);
+  m_image_map->update_instances_added(instance_ids);
 }
 
 template <typename I>
 void PoolReplayer<I>::handle_instances_removed(
     const InstanceIds &instance_ids) {
   dout(5) << "instance_ids=" << instance_ids << dendl;
-  // TODO
+  Mutex::Locker locker(m_lock);
+  if (!m_leader_watcher->is_leader()) {
+    return;
+  }
+
+  assert(m_image_map);
+  m_image_map->update_instances_removed(instance_ids);
 }
 
 } // namespace mirror

@@ -43,13 +43,13 @@ class FlagSetHandler : public FileSystemCommandHandler
       std::stringstream &ss) override
   {
     string flag_name;
-    cmd_getval(g_ceph_context, cmdmap, "flag_name", flag_name);
+    cmd_getval_throws(g_ceph_context, cmdmap, "flag_name", flag_name);
 
     string flag_val;
-    cmd_getval(g_ceph_context, cmdmap, "val", flag_val);
+    cmd_getval_throws(g_ceph_context, cmdmap, "val", flag_val);
 
     string confirm;
-    cmd_getval(g_ceph_context, cmdmap, "confirm", confirm);
+    cmd_getval_throws(g_ceph_context, cmdmap, "confirm", confirm);
 
     if (flag_name == "enable_multiple") {
       bool flag_bool = false;
@@ -79,7 +79,7 @@ class FlagSetHandler : public FileSystemCommandHandler
 class FsNewHandler : public FileSystemCommandHandler
 {
   public:
-  FsNewHandler(Paxos *paxos)
+  explicit FsNewHandler(Paxos *paxos)
     : FileSystemCommandHandler("fs new"), m_paxos(paxos)
   {
   }
@@ -98,7 +98,7 @@ class FsNewHandler : public FileSystemCommandHandler
     assert(m_paxos->is_plugged());
 
     string metadata_name;
-    cmd_getval(g_ceph_context, cmdmap, "metadata", metadata_name);
+    cmd_getval_throws(g_ceph_context, cmdmap, "metadata", metadata_name);
     int64_t metadata = mon->osdmon()->osdmap.lookup_pg_pool_name(metadata_name);
     if (metadata < 0) {
       ss << "pool '" << metadata_name << "' does not exist";
@@ -106,7 +106,7 @@ class FsNewHandler : public FileSystemCommandHandler
     }
 
     string force_str;
-    cmd_getval(g_ceph_context,cmdmap, "force", force_str);
+    cmd_getval_throws(g_ceph_context,cmdmap, "force", force_str);
     bool force = (force_str == "--force");
     const pool_stat_t *stat = mon->mgrstatmon()->get_pool_stat(metadata);
     if (stat) {
@@ -119,7 +119,7 @@ class FsNewHandler : public FileSystemCommandHandler
     }
 
     string data_name;
-    cmd_getval(g_ceph_context, cmdmap, "data", data_name);
+    cmd_getval_throws(g_ceph_context, cmdmap, "data", data_name);
     int64_t data = mon->osdmon()->osdmap.lookup_pg_pool_name(data_name);
     if (data < 0) {
       ss << "pool '" << data_name << "' does not exist";
@@ -131,7 +131,7 @@ class FsNewHandler : public FileSystemCommandHandler
     }
 
     string fs_name;
-    cmd_getval(g_ceph_context, cmdmap, "fs_name", fs_name);
+    cmd_getval_throws(g_ceph_context, cmdmap, "fs_name", fs_name);
     if (fs_name.empty()) {
         // Ensure fs name is not empty so that we can implement
         // commmands that refer to FS by name in future.
@@ -165,7 +165,7 @@ class FsNewHandler : public FileSystemCommandHandler
       string sure;
       if ((std::find(data_pools.begin(), data_pools.end(), data) != data_pools.end()
 	   || fs->mds_map.get_metadata_pool() == metadata)
-	  && ((!cmd_getval(g_ceph_context, cmdmap, "sure", sure)
+	  && ((!cmd_getval_throws(g_ceph_context, cmdmap, "sure", sure)
 	       || sure != "--allow-dangerous-metadata-overlay"))) {
 	ss << "Filesystem '" << fs_name
 	   << "' is already using one of the specified RADOS pools. This should ONLY be done in emergencies and after careful reading of the documentation. Pass --allow-dangerous-metadata-overlay to permit this.";
@@ -202,9 +202,23 @@ class FsNewHandler : public FileSystemCommandHandler
     mon->osdmon()->propose_pending();
 
     // All checks passed, go ahead and create.
-    fsmap.create_filesystem(fs_name, metadata, data,
-                            mon->get_quorum_con_features());
+    auto fs = fsmap.create_filesystem(fs_name, metadata, data,
+        mon->get_quorum_con_features());
+
     ss << "new fs with metadata pool " << metadata << " and data pool " << data;
+
+    // assign a standby to rank 0 to avoid health warnings
+    std::string _name;
+    mds_gid_t gid = fsmap.find_replacement_for({fs->fscid, 0}, _name,
+        g_conf()->mon_force_standby_active);
+
+    if (gid != MDS_GID_NONE) {
+      const auto &info = fsmap.get_info_gid(gid);
+      mon->clog->info() << info.human_name() << " assigned to filesystem "
+          << fs_name << " as rank 0";
+      fsmap.promote(gid, fs, 0);
+    }
+
     return 0;
   }
 
@@ -227,7 +241,7 @@ public:
       std::stringstream &ss) override
   {
     std::string fs_name;
-    if (!cmd_getval(g_ceph_context, cmdmap, "fs_name", fs_name) || fs_name.empty()) {
+    if (!cmd_getval_throws(g_ceph_context, cmdmap, "fs_name", fs_name) || fs_name.empty()) {
       ss << "Missing filesystem name";
       return -EINVAL;
     }
@@ -239,14 +253,14 @@ public:
     }
 
     string var;
-    if (!cmd_getval(g_ceph_context, cmdmap, "var", var) || var.empty()) {
+    if (!cmd_getval_throws(g_ceph_context, cmdmap, "var", var) || var.empty()) {
       ss << "Invalid variable";
       return -EINVAL;
     }
     string val;
     string interr;
     int64_t n = 0;
-    if (!cmd_getval(g_ceph_context, cmdmap, "val", val)) {
+    if (!cmd_getval_throws(g_ceph_context, cmdmap, "val", val)) {
       return -EINVAL;
     }
     // we got a string.  see if it contains an int.
@@ -261,7 +275,15 @@ public:
       if (n <= 0) {
         ss << "You must specify at least one MDS";
         return -EINVAL;
-      } else if (n > MAX_MDS) {
+      }
+      if (n > 1 && n > fs->mds_map.get_max_mds()) {
+	if (fs->mds_map.was_snaps_ever_allowed() &&
+	    !fs->mds_map.allows_multimds_snaps()) {
+	  ss << "multi-active MDS is not allowed while there are snapshots possibly created by pre-mimic MDS";
+	  return -EINVAL;
+	}
+      }
+      if (n > MAX_MDS) {
         ss << "may not have more than " << MAX_MDS << " MDS ranks";
         return -EINVAL;
       }
@@ -282,7 +304,7 @@ public:
 
       if (enable_inline) {
 	string confirm;
-	if (!cmd_getval(g_ceph_context, cmdmap, "confirm", confirm) ||
+	if (!cmd_getval_throws(g_ceph_context, cmdmap, "confirm", confirm) ||
 	    confirm != "--yes-i-really-mean-it") {
 	  ss << EXPERIMENTAL_WARNING;
 	  return -EPERM;
@@ -353,12 +375,6 @@ public:
         });
 	ss << "disabled new snapshots";
       } else {
-	string confirm;
-	if (!cmd_getval(g_ceph_context, cmdmap, "confirm", confirm) ||
-	    confirm != "--yes-i-really-mean-it") {
-	  ss << EXPERIMENTAL_WARNING;
-	  return -EPERM;
-	}
         fsmap.modify_filesystem(
             fs->fscid,
             [](std::shared_ptr<Filesystem> fs)
@@ -372,6 +388,37 @@ public:
            << " parameter to control the number of active MDSs"
            << " allowed. This command is DEPRECATED and will be"
            << " REMOVED from future releases.";
+    } else if (var == "allow_multimds_snaps") {
+      bool enable = false;
+      int r = parse_bool(val, &enable, ss);
+      if (r != 0) {
+        return r;
+      }
+
+      string confirm;
+      if (!cmd_getval_throws(g_ceph_context, cmdmap, "confirm", confirm) ||
+	  confirm != "--yes-i-am-really-a-mds") {
+	ss << "Warning! This command is for MDS only. Do not run it manually";
+	return -EPERM;
+      }
+
+      if (enable) {
+	ss << "enabled multimds with snapshot";
+        fsmap.modify_filesystem(
+            fs->fscid,
+            [](std::shared_ptr<Filesystem> fs)
+        {
+	  fs->mds_map.set_multimds_snaps_allowed();
+        });
+      } else {
+	ss << "disabled multimds with snapshot";
+        fsmap.modify_filesystem(
+            fs->fscid,
+            [](std::shared_ptr<Filesystem> fs)
+        {
+	  fs->mds_map.clear_multimds_snaps_allowed();
+        });
+      }
     } else if (var == "allow_dirfrags") {
         ss << "Directory fragmentation is now permanently enabled."
            << " This command is DEPRECATED and will be REMOVED from future releases.";
@@ -482,6 +529,18 @@ public:
       {
         fs->mds_map.set_session_autoclose((uint32_t)n);
       });
+    } else if (var == "min_compat_client") {
+      int vno = ceph_release_from_name(val.c_str());
+      if (vno <= 0) {
+	ss << "version " << val << " is not recognized";
+	return -EINVAL;
+      }
+      fsmap.modify_filesystem(
+	  fs->fscid,
+	  [vno](std::shared_ptr<Filesystem> fs)
+	{
+	  fs->mds_map.set_min_compat_client((uint8_t)vno);
+	});
     } else {
       ss << "unknown variable " << var;
       return -EINVAL;
@@ -494,7 +553,7 @@ public:
 class AddDataPoolHandler : public FileSystemCommandHandler
 {
   public:
-  AddDataPoolHandler(Paxos *paxos)
+  explicit AddDataPoolHandler(Paxos *paxos)
     : FileSystemCommandHandler("fs add_data_pool"), m_paxos(paxos)
   {}
 
@@ -512,10 +571,10 @@ class AddDataPoolHandler : public FileSystemCommandHandler
     assert(m_paxos->is_plugged());
 
     string poolname;
-    cmd_getval(g_ceph_context, cmdmap, "pool", poolname);
+    cmd_getval_throws(g_ceph_context, cmdmap, "pool", poolname);
 
     std::string fs_name;
-    if (!cmd_getval(g_ceph_context, cmdmap, "fs_name", fs_name)
+    if (!cmd_getval_throws(g_ceph_context, cmdmap, "fs_name", fs_name)
         || fs_name.empty()) {
       ss << "Missing filesystem name";
       return -EINVAL;
@@ -589,7 +648,7 @@ class SetDefaultHandler : public FileSystemCommandHandler
       std::stringstream &ss) override
   {
     std::string fs_name;
-    cmd_getval(g_ceph_context, cmdmap, "fs_name", fs_name);
+    cmd_getval_throws(g_ceph_context, cmdmap, "fs_name", fs_name);
     auto fs = fsmap.get_filesystem(fs_name);
     if (fs == nullptr) {
         ss << "filesystem '" << fs_name << "' does not exist";
@@ -619,7 +678,7 @@ class RemoveFilesystemHandler : public FileSystemCommandHandler
     // (redundant while there is only one FS, but command
     //  syntax should apply to multi-FS future)
     string fs_name;
-    cmd_getval(g_ceph_context, cmdmap, "fs_name", fs_name);
+    cmd_getval_throws(g_ceph_context, cmdmap, "fs_name", fs_name);
     auto fs = fsmap.get_filesystem(fs_name);
     if (fs == nullptr) {
         // Consider absence success to make deletes idempotent
@@ -635,7 +694,7 @@ class RemoveFilesystemHandler : public FileSystemCommandHandler
 
     // Check for confirmation flag
     string sure;
-    cmd_getval(g_ceph_context, cmdmap, "sure", sure);
+    cmd_getval_throws(g_ceph_context, cmdmap, "sure", sure);
     if (sure != "--yes-i-really-mean-it") {
       ss << "this is a DESTRUCTIVE operation and will make data in your filesystem permanently" \
             " inaccessible.  Add --yes-i-really-mean-it if you are sure you wish to continue.";
@@ -656,7 +715,7 @@ class RemoveFilesystemHandler : public FileSystemCommandHandler
     for (const auto &gid : to_fail) {
       // Standby replays don't write, so it isn't important to
       // wait for an osdmap propose here: ignore return value.
-      mon->mdsmon()->fail_mds_gid(gid);
+      mon->mdsmon()->fail_mds_gid(fsmap, gid);
     }
 
     fsmap.erase_filesystem(fs->fscid);
@@ -680,7 +739,7 @@ class ResetFilesystemHandler : public FileSystemCommandHandler
       std::stringstream &ss) override
   {
     string fs_name;
-    cmd_getval(g_ceph_context, cmdmap, "fs_name", fs_name);
+    cmd_getval_throws(g_ceph_context, cmdmap, "fs_name", fs_name);
     auto fs = fsmap.get_filesystem(fs_name);
     if (fs == nullptr) {
         ss << "filesystem '" << fs_name << "' does not exist";
@@ -697,7 +756,7 @@ class ResetFilesystemHandler : public FileSystemCommandHandler
 
     // Check for confirmation flag
     string sure;
-    cmd_getval(g_ceph_context, cmdmap, "sure", sure);
+    cmd_getval_throws(g_ceph_context, cmdmap, "sure", sure);
     if (sure != "--yes-i-really-mean-it") {
       ss << "this is a potentially destructive operation, only for use by experts in disaster recovery.  "
         "Add --yes-i-really-mean-it if you are sure you wish to continue.";
@@ -725,10 +784,10 @@ class RemoveDataPoolHandler : public FileSystemCommandHandler
       std::stringstream &ss) override
   {
     string poolname;
-    cmd_getval(g_ceph_context, cmdmap, "pool", poolname);
+    cmd_getval_throws(g_ceph_context, cmdmap, "pool", poolname);
 
     std::string fs_name;
-    if (!cmd_getval(g_ceph_context, cmdmap, "fs_name", fs_name)
+    if (!cmd_getval_throws(g_ceph_context, cmdmap, "fs_name", fs_name)
         || fs_name.empty()) {
       ss << "Missing filesystem name";
       return -EINVAL;
@@ -790,7 +849,7 @@ class AliasHandler : public T
   std::string alias_prefix;
 
   public:
-  AliasHandler(const std::string &new_prefix)
+  explicit AliasHandler(const std::string &new_prefix)
     : T()
   {
     alias_prefix = new_prefix;

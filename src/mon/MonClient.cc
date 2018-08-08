@@ -61,7 +61,7 @@ MonClient::MonClient(CephContext *cct_) :
   want_monmap(true),
   had_a_connection(false),
   reopen_interval_multiplier(
-    cct_->_conf->get_val<double>("mon_client_hunt_interval_min_multiple")),
+    cct_->_conf.get_val<double>("mon_client_hunt_interval_min_multiple")),
   last_mon_command_tid(0),
   version_req_id(0)
 {}
@@ -163,7 +163,7 @@ out_msgr:
   messenger = nullptr;
 
   if (!monmap.fsid.is_zero()) {
-    cct->_conf->set_val("fsid", stringify(monmap.fsid));
+    cct->_conf.set_val("fsid", stringify(monmap.fsid));
   }
 
 out:
@@ -227,7 +227,7 @@ int MonClient::ping_monitor(const string &mon_id, string *result_reply)
   smsgr->add_dispatcher_head(pinger);
   smsgr->start();
 
-  ConnectionRef con = smsgr->get_connection(monmap.get_inst(new_mon_id));
+  ConnectionRef con = smsgr->connect_to_mon(monmap.get_addrs(new_mon_id));
   ldout(cct, 10) << __func__ << " ping mon." << new_mon_id
                  << " " << con->get_peer_addr() << dendl;
   con->send_message(new MPing);
@@ -271,9 +271,8 @@ bool MonClient::ms_dispatch(Message *m)
   Mutex::Locker lock(monc_lock);
 
   if (_hunting()) {
-    auto pending_con = pending_cons.find(m->get_source_addr());
-    if (pending_con == pending_cons.end() ||
-	pending_con->second.get_con() != m->get_connection()) {
+    auto p = _find_pending_con(m->get_connection());
+    if (p == pending_cons.end()) {
       // ignore any messages outside hunting sessions
       ldout(cct, 10) << "discarding stray monitor message " << *m << dendl;
       m->put();
@@ -349,7 +348,7 @@ void MonClient::handle_monmap(MMonMap *m)
   auto peer = m->get_source_addr();
   string cur_mon = monmap.get_name(peer);
 
-  bufferlist::iterator p = m->monmapbl.begin();
+  auto p = m->monmapbl.cbegin();
   decode(monmap, p);
 
   ldout(cct, 10) << " got monmap " << monmap.epoch
@@ -374,8 +373,10 @@ void MonClient::handle_monmap(MMonMap *m)
 void MonClient::handle_config(MConfig *m)
 {
   ldout(cct,10) << __func__ << " " << *m << dendl;
-  cct->_conf->set_mon_vals(cct, m->config, config_cb);
-  m->put();
+  finisher.queue(new FunctionContext([this, m](int r) {
+	cct->_conf.set_mon_vals(cct, m->config, config_cb);
+	m->put();
+      }));
   got_config = true;
   map_cond.Signal();
 }
@@ -539,7 +540,7 @@ void MonClient::handle_auth(MAuthReply *m)
   }
 
   // hunting
-  auto found = pending_cons.find(m->get_source_addr());
+  auto found = _find_pending_con(m->get_connection());
   assert(found != pending_cons.end());
   int auth_err = found->second.handle_auth(m, entity_name, want_keys,
 					   rotating_secrets.get());
@@ -664,7 +665,7 @@ void MonClient::_reopen_session(int rank)
 MonConnection& MonClient::_add_conn(unsigned rank, uint64_t global_id)
 {
   auto peer = monmap.get_addr(rank);
-  auto conn = messenger->get_connection(monmap.get_inst(rank));
+  auto conn = messenger->connect_to_mon(monmap.get_addrs(rank));
   MonConnection mc(cct, conn, global_id);
   auto inserted = pending_cons.insert(make_pair(peer, move(mc)));
   ldout(cct, 10) << "picked mon." << monmap.get_name(rank)
@@ -817,9 +818,9 @@ void MonClient::_un_backoff()
 {
   // un-backoff our reconnect interval
   reopen_interval_multiplier = std::max(
-    cct->_conf->get_val<double>("mon_client_hunt_interval_min_multiple"),
+    cct->_conf.get_val<double>("mon_client_hunt_interval_min_multiple"),
     reopen_interval_multiplier /
-    cct->_conf->get_val<double>("mon_client_hunt_interval_backoff"));
+    cct->_conf.get_val<double>("mon_client_hunt_interval_backoff"));
   ldout(cct, 20) << __func__ << " reopen_interval_multipler now "
 		 << reopen_interval_multiplier << dendl;
 }
@@ -1316,7 +1317,7 @@ int MonConnection::authenticate(MAuthReply *m)
     auth->set_global_id(global_id);
     ldout(cct, 10) << "my global_id is " << m->global_id << dendl;
   }
-  auto p = m->result_bl.begin();
+  auto p = m->result_bl.cbegin();
   int ret = auth->handle_response(m->result, p);
   if (ret == -EAGAIN) {
     auto ma = new MAuth;

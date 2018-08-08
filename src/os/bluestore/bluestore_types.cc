@@ -34,7 +34,7 @@ void bluestore_bdev_label_t::encode(bufferlist& bl) const
   ENCODE_FINISH(bl);
 }
 
-void bluestore_bdev_label_t::decode(bufferlist::iterator& p)
+void bluestore_bdev_label_t::decode(bufferlist::const_iterator& p)
 {
   p.advance(60); // see above
   DECODE_START(2, p);
@@ -92,6 +92,11 @@ void bluestore_cnode_t::generate_test_instances(list<bluestore_cnode_t*>& o)
   o.push_back(new bluestore_cnode_t());
   o.push_back(new bluestore_cnode_t(0));
   o.push_back(new bluestore_cnode_t(123));
+}
+
+ostream& operator<<(ostream& out, const bluestore_cnode_t& l)
+{
+  return out << "cnode(bits " << l.bits << ")";
 }
 
 // bluestore_extent_ref_map_t

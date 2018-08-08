@@ -17,7 +17,6 @@ if(WITH_RBD)
   add_subdirectory(cls_rbd)
 endif(WITH_RBD)
 add_subdirectory(cls_refcount)
-add_subdirectory(cls_replica_log)
 add_subdirectory(cls_rgw)
 add_subdirectory(cls_statelog)
 add_subdirectory(cls_version)
@@ -31,9 +30,6 @@ add_subdirectory(erasure-code)
 add_subdirectory(filestore)
 add_subdirectory(fs)
 add_subdirectory(journal)
-if(WITH_EMBEDDED)
-  add_subdirectory(libcephd)
-endif(WITH_EMBEDDED)
 add_subdirectory(libcephfs)
 add_subdirectory(librados)
 add_subdirectory(librados_test_stub)
@@ -58,6 +54,9 @@ endif(${WITH_RADOSGW})
 if(WITH_RBD)
   add_subdirectory(rbd_mirror)
 endif(WITH_RBD)
+if(WITH_SEASTAR)
+  add_subdirectory(crimson)
+endif()
 add_subdirectory(system)
 if(WITH_FIO OR WITH_SYSTEM_FIO)
   add_subdirectory(fio)
@@ -104,6 +103,11 @@ if(WITH_RADOSGW)
   target_link_libraries(test_build_librgw rgw_a pthread ${CRYPTO_LIBS} ${EXTRALIBS})
 endif(WITH_RADOSGW)
 
+if(WITH_RADOSGW)
+  add_executable(test_build_librgw_admin_user buildtest_skeleton.cc)
+  target_link_libraries(test_build_librgw_admin_user pthread ${CRYPTO_LIBS} ${EXTRALIBS})
+endif(WITH_RADOSGW)
+
 if(WITH_LIBCEPHFS)
   # From src/test/Makefile-client.am: I dont get this one... testing the osdc build but link in libcephfs?
   add_executable(test_build_libcephfs buildtest_skeleton.cc)
@@ -126,7 +130,7 @@ target_link_libraries(ceph_bench_log global pthread rt ${BLKID_LIBRARIES} ${CMAK
 add_executable(ceph_test_mutate
   test_mutate.cc
   )
-target_link_libraries(ceph_test_mutate global librados ${BLKID_LIBRARIES} 
+target_link_libraries(ceph_test_mutate global librados ${BLKID_LIBRARIES}
   ${CMAKE_DL_LIBS})
 
 # test_trans
@@ -387,6 +391,18 @@ target_link_libraries(test_rgw_ldap
   ${UNITTEST_LIBS}
   )
 
+# unittest_librgw_admin_user
+add_executable(ceph_test_librgw_admin_user test_librgw_admin_user.cc)
+set_target_properties(ceph_test_librgw_admin_user PROPERTIES COMPILE_FLAGS ${UNITTEST_CXX_FLAGS})
+target_link_libraries(ceph_test_librgw_admin_user
+  rgw_admin_user
+  cls_otp_client
+  librados
+  ceph-common
+  ${UNITTEST_LIBS}
+  ${EXTRALIBS}
+   )
+
 endif(${WITH_RADOSGW})
 
 # ceph_multi_stress_watch
@@ -397,7 +413,7 @@ target_link_libraries(ceph_multi_stress_watch librados global radostest
   ${BLKID_LIBRARIES} ${CMAKE_DL_LIBS})
 
 #ceph_perf_local
-add_executable(ceph_perf_local 
+add_executable(ceph_perf_local
   perf_local.cc
   perf_helper.cc)
 if(HAVE_SSE)
@@ -501,30 +517,24 @@ endif(HAVE_BLKID)
 
 # ceph_test_admin_socket_output
 
-add_executable(ceph_test_admin_socket_output
-  test_admin_socket_output.cc
-  admin_socket_output.cc
-  admin_socket_output_tests.cc
-  )
-target_link_libraries(ceph_test_admin_socket_output
-  ceph-common)
-if(CXX_STDLIB STREQUAL "libstdc++")
+find_package(StdFilesystem)
+if(StdFilesystem_FOUND)
+  add_executable(ceph_test_admin_socket_output
+    test_admin_socket_output.cc
+    admin_socket_output.cc
+    admin_socket_output_tests.cc)
   target_link_libraries(ceph_test_admin_socket_output
-    -lstdc++fs)
-elseif(CXX_STDLIB STREQUAL "libc++")
-  target_link_libraries(ceph_test_admin_socket_output
-    -lc++experimental)
+    ceph-common StdFilesystem::filesystem)
+  install(TARGETS
+    ceph_test_admin_socket_output
+    DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
-install(TARGETS
-  ceph_test_admin_socket_output
-  DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 #make check starts here
 
 #following dependencies are run inside make check unit tests
 add_dependencies(tests
   ceph-mon
-  ceph-mgr
   ceph-authtool
   get_command_descriptions
   crushtool
@@ -544,8 +554,10 @@ add_dependencies(tests
   ceph_test_objectstore
   ceph_erasure_code_non_regression
   ceph_erasure_code
-  ceph-disk
-  cython_modules)
+  cython${PY_BINDING_INFIX}_modules)
+if(WITH_MGR)
+  add_dependencies(tests ceph-mgr)
+endif()
 if(WITH_RBD)
   add_dependencies(tests unittest_librbd rbd)
   if(FREEBSD)
@@ -555,9 +567,10 @@ endif(WITH_RBD)
 if(WITH_RADOSGW)
   add_dependencies(tests radosgw radosgw-admin)
 endif(WITH_RADOSGW)
-if(NOT FREEBSD)
-  add_dependencies(tests ceph-detect-init)
-endif(NOT FREEBSD)
+#add dependency from fio just to ensure the plugin build isn't failing
+if(WITH_FIO OR WITH_SYSTEM_FIO)
+  add_dependencies(tests fio_ceph_objectstore)
+endif()
 
 if(WITH_RBD)
   add_ceph_test(run-rbd-unit-tests.sh ${CMAKE_CURRENT_SOURCE_DIR}/run-rbd-unit-tests.sh)
@@ -571,25 +584,16 @@ add_ceph_test(test_objectstore_memstore.sh ${CMAKE_CURRENT_SOURCE_DIR}/test_obje
 # flaky
 #add_ceph_test(test_pidfile.sh ${CMAKE_CURRENT_SOURCE_DIR}/test_pidfile.sh)
 
-add_ceph_test(test_subman.sh ${CMAKE_CURRENT_SOURCE_DIR}/test_subman.sh)
 add_ceph_test(smoke.sh ${CMAKE_CURRENT_SOURCE_DIR}/smoke.sh)
 add_ceph_test(unittest_bufferlist.sh ${CMAKE_SOURCE_DIR}/src/unittest_bufferlist.sh)
 
-add_test(NAME run-tox-ceph-disk COMMAND bash ${CMAKE_SOURCE_DIR}/src/ceph-disk/run-tox.sh)
-add_test(NAME run-tox-ceph-detect-init COMMAND bash ${CMAKE_SOURCE_DIR}/src/ceph-detect-init/run-tox.sh)
-
-set(CEPH_DISK_VIRTUALENV ${CEPH_BUILD_VIRTUALENV}/ceph-disk-virtualenv)
-set(CEPH_DETECT_INIT_VIRTUALENV ${CEPH_BUILD_VIRTUALENV}/ceph-detect-init-virtualenv)
-
-set(tox_tests run-tox-ceph-disk run-tox-ceph-detect-init)
+# XXX are these safe to remove? they used to be around for ceph-disk tox testing
 set(env_vars_for_tox_tests
   CEPH_BUILD_DIR=${CMAKE_BINARY_DIR}
   CEPH_ROOT=${CMAKE_SOURCE_DIR}
   CEPH_BIN=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
   CEPH_LIB=${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
   CEPH_BUILD_VIRTUALENV=${CEPH_BUILD_VIRTUALENV}
-  CEPH_DISK_VIRTUALENV=${CEPH_DISK_VIRTUALENV}
-  CEPH_DETECT_INIT_VIRTUALENV=${CEPH_DETECT_INIT_VIRTUALENV}
   LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib
   PATH=$ENV{PATH}:${CMAKE_RUNTIME_OUTPUT_DIRECTORY}:${CMAKE_SOURCE_DIR}/src
   PYTHONPATH=${CMAKE_SOURCE_DIR}/src/pybind
@@ -613,7 +617,7 @@ add_executable(unittest_admin_socket
   $<TARGET_OBJECTS:unit-main>
   )
 add_ceph_unittest(unittest_admin_socket)
-target_link_libraries(unittest_admin_socket global) 
+target_link_libraries(unittest_admin_socket global)
 
 # unittest_encoding
 add_executable(unittest_encoding
@@ -671,7 +675,7 @@ add_executable(unittest_base64
   base64.cc
   )
 add_ceph_unittest(unittest_base64)
-target_link_libraries(unittest_base64 global) 
+target_link_libraries(unittest_base64 global)
 
 # unittest_ceph_argparse
 add_executable(unittest_ceph_argparse
@@ -744,7 +748,7 @@ add_executable(unittest_denc
   test_denc.cc
   )
 add_ceph_unittest(unittest_denc)
-target_link_libraries(unittest_denc os global)
+target_link_libraries(unittest_denc global)
 
 # unittest_mempool
 add_executable(unittest_mempool
@@ -881,7 +885,7 @@ endif(WITH_RBD)
 
 # unittest_ipaddr
 add_executable(unittest_ipaddr
-  test_ipaddr.cc)  
+  test_ipaddr.cc)
 add_ceph_unittest(unittest_ipaddr)
 target_link_libraries(unittest_ipaddr mon global)
 

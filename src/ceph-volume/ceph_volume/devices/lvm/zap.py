@@ -49,6 +49,9 @@ class Zap(object):
     @decorators.needs_root
     def zap(self, args):
         device = args.device
+        if disk.is_mapper_device(device):
+            terminal.error("Refusing to zap the mapper device: {}".format(device))
+            raise SystemExit(1)
         lv = api.get_lv_from_argument(device)
         if lv:
             # we are zapping a logical volume
@@ -70,12 +73,15 @@ class Zap(object):
         dmcrypt = False
         dmcrypt_uuid = None
         if lv:
-            osd_path = "/var/lib/ceph/osd/{}-{}".format(lv.tags['ceph.cluster_name'], lv.tags['ceph.osd_id'])
+            if lv.tags.get('ceph.cluster_name') and lv.tags.get('ceph.osd_id'):
+                lv_path = "/var/lib/ceph/osd/{}-{}".format(lv.tags['ceph.cluster_name'], lv.tags['ceph.osd_id'])
+            else:
+                lv_path = lv.path
             dmcrypt_uuid = lv.lv_uuid
             dmcrypt = lv.encrypted
-            if system.path_is_mounted(osd_path):
-                mlogger.info("Unmounting %s", osd_path)
-                system.unmount(osd_path)
+            if system.path_is_mounted(lv_path):
+                mlogger.info("Unmounting %s", lv_path)
+                system.unmount(lv_path)
         else:
             # we're most likely dealing with a partition here, check to
             # see if it was encrypted

@@ -46,6 +46,7 @@ ostream& operator<<(ostream &out, const Inode &in)
       << " open=" << in.open_by_mode
       << " mode=" << oct << in.mode << dec
       << " size=" << in.size << "/" << in.max_size
+      << " nlink=" << in.nlink
       << " btime=" << in.btime
       << " mtime=" << in.mtime
       << " ctime=" << in.ctime
@@ -133,7 +134,9 @@ void Inode::get_open_ref(int mode)
 bool Inode::put_open_ref(int mode)
 {
   //cout << "open_by_mode[" << mode << "] " << open_by_mode[mode] << " -> " << (open_by_mode[mode]-1) << std::endl;
-  if (--open_by_mode[mode] == 0)
+  auto& ref = open_by_mode.at(mode);
+  assert(ref > 0);
+  if (--ref == 0)
     return true;
   return false;
 }
@@ -544,7 +547,7 @@ void Inode::dump(Formatter *f) const
 void Cap::dump(Formatter *f) const
 {
   f->dump_int("mds", session->mds_num);
-  f->dump_stream("ino") << inode->ino;
+  f->dump_stream("ino") << inode.ino;
   f->dump_unsigned("cap_id", cap_id);
   f->dump_stream("issued") << ccap_string(issued);
   if (implemented != issued)

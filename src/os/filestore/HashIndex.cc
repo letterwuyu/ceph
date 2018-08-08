@@ -99,7 +99,7 @@ int HashIndex::cleanup() {
     // No in progress operations!
     return 0;
   }
-  bufferlist::iterator i = bl.begin();
+  auto i = bl.cbegin();
   InProgressOp in_progress(i);
   subdir_info_s info;
   r = get_info(in_progress.path, &info);
@@ -321,7 +321,7 @@ int HashIndex::split_dirs(const vector<string> &path, int target_level) {
   if (must_split(info, target_level)) {
     dout(1) << __func__ << " " << path << " has " << info.objs
             << " objects, " << info.hash_level 
-            << " level, starting split." << dendl;
+            << " level, starting split in pg " << coll() << "." << dendl;
     r = initiate_split(path, info);
     if (r < 0) {
       dout(10) << "error initiating split on " << path << ": "
@@ -330,7 +330,7 @@ int HashIndex::split_dirs(const vector<string> &path, int target_level) {
     }
 
     r = complete_split(path, info);
-    dout(1) << __func__ << " " << path << " split completed."
+    dout(1) << __func__ << " " << path << " split completed in pg " << coll() << "."
             << dendl;
     if (r < 0) {
       dout(10) << "error completing split on " << path << ": "
@@ -403,7 +403,7 @@ int HashIndex::read_settings() {
     derr << __func__ << " error reading settings: " << cpp_strerror(r) << dendl;
     return r;
   }
-  bufferlist::iterator it = bl.begin();
+  auto it = bl.cbegin();
   settings.decode(it);
   dout(20) << __func__ << " split_rand_factor = " << settings.split_rand_factor << dendl;
   return 0;
@@ -425,12 +425,12 @@ int HashIndex::_created(const vector<string> &path,
 
   if (must_split(info)) {
     dout(1) << __func__ << " " << path << " has " << info.objs
-            << " objects, starting split." << dendl;
+            << " objects, starting split in pg " << coll() << "." << dendl;
     int r = initiate_split(path, info);
     if (r < 0)
       return r;
     r = complete_split(path, info);
-    dout(1) << __func__ << " " << path << " split completed."
+    dout(1) << __func__ << " " << path << " split completed in pg " << coll() << "."
             << dendl;
     return r;
   } else {
@@ -724,7 +724,7 @@ int HashIndex::get_info(const vector<string> &path, subdir_info_s *info) {
   int r = get_attr_path(path, SUBDIR_ATTR, buf);
   if (r < 0)
     return r;
-  bufferlist::iterator bufiter = buf.begin();
+  auto bufiter = buf.cbegin();
   info->decode(bufiter);
   assert(path.size() == (unsigned)info->hash_level);
   return 0;

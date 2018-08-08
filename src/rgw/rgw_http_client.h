@@ -177,6 +177,7 @@ public:
   int process();
 
   int wait();
+  void cancel();
   bool is_done();
 
   rgw_http_req_data *get_req_data() { return req_data; }
@@ -315,7 +316,7 @@ class RGWHTTPManager {
   void register_request(rgw_http_req_data *req_data);
   void complete_request(rgw_http_req_data *req_data);
   void _complete_request(rgw_http_req_data *req_data);
-  void unregister_request(rgw_http_req_data *req_data);
+  bool unregister_request(rgw_http_req_data *req_data);
   void _unlink_request(rgw_http_req_data *req_data);
   void unlink_request(rgw_http_req_data *req_data);
   void finish_request(rgw_http_req_data *req_data, int r);
@@ -329,7 +330,7 @@ class RGWHTTPManager {
     RGWHTTPManager *manager;
 
   public:
-    ReqsThread(RGWHTTPManager *_m) : manager(_m) {}
+    explicit ReqsThread(RGWHTTPManager *_m) : manager(_m) {}
     void *entry() override;
   };
 

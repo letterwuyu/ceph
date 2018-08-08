@@ -30,6 +30,7 @@
 #include "include/compact_set.h"
 
 #include "MDSCacheObject.h"
+#include "MDSContext.h"
 #include "flock.h"
 
 #include "CDentry.h"
@@ -98,11 +99,11 @@ public:
 
   /* Full serialization for use in ".inode" root inode objects */
   void encode(bufferlist &bl, uint64_t features, const bufferlist *snap_blob=NULL) const;
-  void decode(bufferlist::iterator &bl, bufferlist& snap_blob);
+  void decode(bufferlist::const_iterator &bl, bufferlist& snap_blob);
 
   /* Serialization without ENCODE_START/FINISH blocks for use embedded in dentry */
   void encode_bare(bufferlist &bl, uint64_t features, const bufferlist *snap_blob=NULL) const;
-  void decode_bare(bufferlist::iterator &bl, bufferlist &snap_blob, __u8 struct_v=5);
+  void decode_bare(bufferlist::const_iterator &bl, bufferlist &snap_blob, __u8 struct_v=5);
 
   /* For test/debug output */
   void dump(Formatter *f) const;
@@ -120,13 +121,13 @@ public:
   void encode(bufferlist &bl, uint64_t features) const {
     InodeStoreBase::encode(bl, features, &snap_blob);
   }
-  void decode(bufferlist::iterator &bl) {
+  void decode(bufferlist::const_iterator &bl) {
     InodeStoreBase::decode(bl, snap_blob);
   }
   void encode_bare(bufferlist &bl, uint64_t features) const {
     InodeStoreBase::encode_bare(bl, features, &snap_blob);
   }
-  void decode_bare(bufferlist::iterator &bl) {
+  void decode_bare(bufferlist::const_iterator &bl) {
     InodeStoreBase::decode_bare(bl, snap_blob);
   }
 
@@ -140,7 +141,7 @@ public:
   void encode(bufferlist &bl, uint64_t features) const {
     InodeStore::encode_bare(bl, features);
   }
-  void decode(bufferlist::iterator &bl) {
+  void decode(bufferlist::const_iterator &bl) {
     InodeStore::decode_bare(bl);
   }
   static void generate_test_instances(std::list<InodeStoreBare*>& ls);
@@ -427,7 +428,7 @@ public:
     sr_t *snapnode = UNDEF_SRNODE;
 
     projected_inode() = delete;
-    projected_inode(const mempool_inode &in) : inode(in) {}
+    explicit projected_inode(const mempool_inode &in) : inode(in) {}
   };
 
 private:
@@ -538,6 +539,11 @@ public:
   // -- cache infrastructure --
 private:
   mempool::mds_co::compact_map<frag_t,CDir*> dirfrags; // cached dir fragments under this Inode
+
+  //for the purpose of quickly determining whether there's a subtree root or exporting dir
+  int num_subtree_roots = 0;
+  int num_exporting_dirs = 0;
+
   int stickydir_ref = 0;
   scrub_info_t *scrub_infop = nullptr;
 
@@ -546,7 +552,7 @@ public:
   CDir* get_dirfrag(frag_t fg) {
     auto pi = dirfrags.find(fg);
     if (pi != dirfrags.end()) {
-      //assert(g_conf->debug_mds < 2 || dirfragtree.is_leaf(fg)); // performance hack FIXME
+      //assert(g_conf()->debug_mds < 2 || dirfragtree.is_leaf(fg)); // performance hack FIXME
       return pi->second;
     } 
     return NULL;
@@ -581,8 +587,8 @@ public:
   // -- distributed state --
 protected:
   // file capabilities
-  using cap_map = mempool::mds_co::map<client_t, Capability*>;
-  cap_map client_caps;         // client -> caps
+  using mempool_cap_map = mempool::mds_co::map<client_t, Capability>;
+  mempool_cap_map client_caps;         // client -> caps
   mempool::mds_co::compact_map<int32_t, int32_t>      mds_caps_wanted;     // [auth] mds -> caps wanted
   int replica_caps_wanted = 0; // [replica] what i've requested from auth
   int num_caps_wanted = 0;
@@ -633,7 +639,7 @@ protected:
     if (has_flock_locks)
       encode(*flock_locks, bl);
   }
-  void _decode_file_locks(bufferlist::iterator& p) {
+  void _decode_file_locks(bufferlist::const_iterator& p) {
     using ceph::decode;
     bool has_fcntl_locks;
     decode(has_fcntl_locks, p);
@@ -681,30 +687,7 @@ public:
 
   // ---------------------------
   CInode() = delete;
-  CInode(MDCache *c, bool auth=true, snapid_t f=2, snapid_t l=CEPH_NOSNAP) : 
-    mdcache(c),
-    first(f), last(l),
-    item_dirty(this),
-    item_caps(this),
-    item_open_file(this),
-    item_dirty_parent(this),
-    item_dirty_dirfrag_dir(this), 
-    item_dirty_dirfrag_nest(this), 
-    item_dirty_dirfrag_dirfragtree(this), 
-    pop(ceph_clock_now()),
-    versionlock(this, &versionlock_type),
-    authlock(this, &authlock_type),
-    linklock(this, &linklock_type),
-    dirfragtreelock(this, &dirfragtreelock_type),
-    filelock(this, &filelock_type),
-    xattrlock(this, &xattrlock_type),
-    snaplock(this, &snaplock_type),
-    nestlock(this, &nestlock_type),
-    flocklock(this, &flocklock_type),
-    policylock(this, &policylock_type)
-  {
-    if (auth) state_set(STATE_AUTH);
-  }
+  CInode(MDCache *c, bool auth=true, snapid_t f=2, snapid_t l=CEPH_NOSNAP);
   ~CInode() override {
     close_dirfrags();
     close_snaprealm();
@@ -712,6 +695,8 @@ public:
     assert(num_projected_xattrs == 0);
     assert(num_projected_srnodes == 0);
     assert(num_caps_wanted == 0);
+    assert(num_subtree_roots == 0);
+    assert(num_exporting_dirs == 0);
   }
   
 
@@ -736,7 +721,7 @@ public:
   void set_ambiguous_auth() {
     state_set(STATE_AMBIGUOUSAUTH);
   }
-  void clear_ambiguous_auth(std::list<MDSInternalContextBase*>& finished);
+  void clear_ambiguous_auth(MDSInternalContextBase::vec& finished);
   void clear_ambiguous_auth();
 
   inodeno_t ino() const { return inode.ino; }
@@ -807,7 +792,7 @@ protected:
    */
   int64_t get_backtrace_pool() const;
 public:
-  void _mark_dirty_parent(LogSegment *ls, bool dirty_pool=false);
+  void mark_dirty_parent(LogSegment *ls, bool dirty_pool=false);
   void clear_dirty_parent();
   void verify_diri_backtrace(bufferlist &bl, int err);
   bool is_dirty_parent() { return state_test(STATE_DIRTYPARENT); }
@@ -816,7 +801,7 @@ public:
   void encode_snap_blob(bufferlist &bl);
   void decode_snap_blob(bufferlist &bl);
   void encode_store(bufferlist& bl, uint64_t features);
-  void decode_store(bufferlist::iterator& bl);
+  void decode_store(bufferlist::const_iterator& bl);
 
   void encode_replica(mds_rank_t rep, bufferlist& bl, uint64_t features, bool need_recover) {
     assert(is_auth());
@@ -832,7 +817,7 @@ public:
     _encode_base(bl, features);
     _encode_locks_state_for_replica(bl, need_recover);
   }
-  void decode_replica(bufferlist::iterator& p, bool is_new) {
+  void decode_replica(bufferlist::const_iterator& p, bool is_new) {
     using ceph::decode;
     __u32 nonce;
     decode(nonce, p);
@@ -844,37 +829,37 @@ public:
 
   // -- waiting --
 protected:
-  mempool::mds_co::compact_map<frag_t, std::list<MDSInternalContextBase*> > waiting_on_dir;
+  mempool::mds_co::compact_map<frag_t, MDSInternalContextBase::vec > waiting_on_dir;
 public:
   void add_dir_waiter(frag_t fg, MDSInternalContextBase *c);
-  void take_dir_waiting(frag_t fg, std::list<MDSInternalContextBase*>& ls);
+  void take_dir_waiting(frag_t fg, MDSInternalContextBase::vec& ls);
   bool is_waiting_for_dir(frag_t fg) {
     return waiting_on_dir.count(fg);
   }
   void add_waiter(uint64_t tag, MDSInternalContextBase *c) override;
-  void take_waiting(uint64_t tag, std::list<MDSInternalContextBase*>& ls) override;
+  void take_waiting(uint64_t tag, MDSInternalContextBase::vec& ls) override;
 
   // -- encode/decode helpers --
   void _encode_base(bufferlist& bl, uint64_t features);
-  void _decode_base(bufferlist::iterator& p);
+  void _decode_base(bufferlist::const_iterator& p);
   void _encode_locks_full(bufferlist& bl);
-  void _decode_locks_full(bufferlist::iterator& p);
+  void _decode_locks_full(bufferlist::const_iterator& p);
   void _encode_locks_state_for_replica(bufferlist& bl, bool need_recover);
   void _encode_locks_state_for_rejoin(bufferlist& bl, int rep);
-  void _decode_locks_state(bufferlist::iterator& p, bool is_new);
-  void _decode_locks_rejoin(bufferlist::iterator& p, std::list<MDSInternalContextBase*>& waiters,
+  void _decode_locks_state(bufferlist::const_iterator& p, bool is_new);
+  void _decode_locks_rejoin(bufferlist::const_iterator& p, MDSInternalContextBase::vec& waiters,
 			    std::list<SimpleLock*>& eval_locks, bool survivor);
 
   // -- import/export --
   void encode_export(bufferlist& bl);
-  void finish_export(utime_t now);
+  void finish_export();
   void abort_export() {
     put(PIN_TEMPEXPORTING);
     assert(state_test(STATE_EXPORTINGCAPS));
     state_clear(STATE_EXPORTINGCAPS);
     put(PIN_EXPORTINGCAPS);
   }
-  void decode_import(bufferlist::iterator& p, LogSegment *ls);
+  void decode_import(bufferlist::const_iterator& p, LogSegment *ls);
   
 
   // for giving to clients
@@ -945,7 +930,7 @@ public:
   void close_snaprealm(bool no_join=false);
   SnapRealm *find_snaprealm() const;
   void encode_snap(bufferlist& bl);
-  void decode_snap(bufferlist::iterator& p);
+  void decode_snap(bufferlist::const_iterator& p);
 
   // -- caps -- (new)
   // client caps
@@ -975,7 +960,7 @@ public:
   int count_nonstale_caps() {
     int n = 0;
     for (const auto &p : client_caps) {
-      if (!p.second->is_stale())
+      if (!p.second.is_stale())
 	n++;
     }
     return n;
@@ -983,7 +968,7 @@ public:
   bool multiple_nonstale_caps() {
     int n = 0;
     for (const auto &p : client_caps) {
-      if (!p.second->is_stale()) {
+      if (!p.second.is_stale()) {
 	if (n)
 	  return true;
 	n++;
@@ -999,17 +984,17 @@ public:
   void set_mds_caps_wanted(mempool::mds_co::compact_map<int32_t,int32_t>& m);
   void set_mds_caps_wanted(mds_rank_t mds, int32_t wanted);
 
-  const cap_map& get_client_caps() const { return client_caps; }
+  const mempool_cap_map& get_client_caps() const { return client_caps; }
   Capability *get_client_cap(client_t client) {
     auto client_caps_entry = client_caps.find(client);
     if (client_caps_entry != client_caps.end())
-      return client_caps_entry->second;
+      return &client_caps_entry->second;
     return 0;
   }
   int get_client_cap_pending(client_t client) const {
     auto client_caps_entry = client_caps.find(client);
     if (client_caps_entry != client_caps.end()) {
-      return client_caps_entry->second->pending();
+      return client_caps_entry->second.pending();
     } else {
       return 0;
     }
@@ -1062,7 +1047,7 @@ public:
   /* Freeze the inode. auth_pin_allowance lets the caller account for any
    * auth_pins it is itself holding/responsible for. */
   bool freeze_inode(int auth_pin_allowance=0);
-  void unfreeze_inode(std::list<MDSInternalContextBase*>& finished);
+  void unfreeze_inode(MDSInternalContextBase::vec& finished);
   void unfreeze_inode();
 
   void freeze_auth_pin();
@@ -1099,7 +1084,7 @@ public:
 public:
   void set_primary_parent(CDentry *p) {
     assert(parent == 0 ||
-	   g_conf->get_val<bool>("mds_hack_allow_loading_invalid_metadata"));
+	   g_conf().get_val<bool>("mds_hack_allow_loading_invalid_metadata"));
     parent = p;
   }
   void remove_primary_parent(CDentry *dn) {

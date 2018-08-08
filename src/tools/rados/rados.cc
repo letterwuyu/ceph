@@ -131,6 +131,7 @@ void usage(ostream& out)
 "   set-chunk <object A> <offset> <length> --target-pool <caspool> <target object A> <taget-offset> [--with-reference]\n"
 "                                    convert an object to chunked object\n"
 "   tier-promote <obj-name>	     promote the object to the base tier\n"
+"   unset-manifest <obj-name>	     unset redirect or chunked object\n"
 "\n"
 "IMPORT AND EXPORT\n"
 "   export [filename]\n"
@@ -1385,7 +1386,7 @@ static void dump_shard(const shard_info_t& shard,
     if (!shard.has_info_corrupted()) {
       object_info_t oi;
       bufferlist bl;
-      bufferlist::iterator bliter = k->second.begin();
+      auto bliter = k->second.cbegin();
       decode(oi, bliter);  // Can't be corrupted
       f.open_object_section("object_info");
       oi.dump(&f);
@@ -1404,7 +1405,7 @@ static void dump_shard(const shard_info_t& shard,
     if (!shard.has_snapset_corrupted()) {
       SnapSet ss;
       bufferlist bl;
-      bufferlist::iterator bliter = k->second.begin();
+      auto bliter = k->second.cbegin();
       decode(ss, bliter);  // Can't be corrupted
       f.open_object_section("snapset");
       ss.dump(&f);
@@ -1423,7 +1424,7 @@ static void dump_shard(const shard_info_t& shard,
     if (!shard.has_hinfo_corrupted()) {
       ECUtil::HashInfo hi;
       bufferlist bl;
-      bufferlist::iterator bliter = k->second.begin();
+      auto bliter = k->second.cbegin();
       decode(hi, bliter);  // Can't be corrupted
       f.open_object_section("hashinfo");
       hi.dump(&f);
@@ -1509,7 +1510,7 @@ static void dump_inconsistent(const inconsistent_obj_t& inc,
       bufferlist bl;
       auto k = shard.attrs.find(OI_ATTR);
       assert(k != shard.attrs.end()); // Can't be missing
-      bufferlist::iterator bliter = k->second.begin();
+      auto bliter = k->second.cbegin();
       decode(oi, bliter);  // Can't be corrupted
       f.open_object_section("selected_object_info");
       oi.dump(&f);
@@ -1540,7 +1541,7 @@ static void dump_inconsistent(const inconsistent_snapset_t& inc,
   if (inc.ss_bl.length()) {
     SnapSet ss;
     bufferlist bl = inc.ss_bl;
-    bufferlist::iterator bliter = bl.begin();
+    auto bliter = bl.cbegin();
     decode(ss, bliter);  // Can't be corrupted
     f.open_object_section("snapset");
     ss.dump(&f);
@@ -1946,6 +1947,14 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
     with_reference = true;
   }
 
+  i = opts.find("pgid");
+  boost::optional<pg_t> pgid(i != opts.end(), pg_t());
+  if (pgid && (!pgid->parse(i->second.c_str()) || (pool_name && rados.pool_lookup(pool_name) != pgid->pool()))) {
+    cerr << "invalid pgid" << std::endl;
+    ret = -1;
+    goto out;
+  }
+
   // open rados
   ret = rados.init_with_context(g_ceph_context);
   if (ret < 0) {
@@ -1975,10 +1984,11 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
   }
 
   // open io context.
-  if (pool_name) {
-    ret = rados.ioctx_create(pool_name, io_ctx);
+  if (pool_name || pgid) {
+    ret = pool_name ? rados.ioctx_create(pool_name, io_ctx) : rados.ioctx_create2(pgid->pool(), io_ctx);
     if (ret < 0) {
-      cerr << "error opening pool " << pool_name << ": "
+      cerr << "error opening pool "
+           << (pool_name ? pool_name : std::string("with id ") + std::to_string(pgid->pool())) << ": "
 	   << cpp_strerror(ret) << std::endl;
       goto out;
     }
@@ -2203,26 +2213,31 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
   }
 
   else if (strcmp(nargs[0], "ls") == 0) {
-    if (!pool_name) {
-      cerr << "pool name was not specified" << std::endl;
+    if (!pool_name && !pgid) {
+      cerr << "either pool name or pg id needs to be specified" << std::endl;
       ret = -1;
       goto out;
     }
 
     if (wildcard)
       io_ctx.set_namespace(all_nspaces);
-    bool use_stdout = (nargs.size() < 2) || (strcmp(nargs[1], "-") == 0);
+    bool use_stdout = (!output && (nargs.size() < 2 || (strcmp(nargs[1], "-") == 0)));
+    if (!use_stdout && !output) {
+      cerr << "Please use --output to specify the output file name" << std::endl;
+      ret = -1;
+      goto out;
+    }
     ostream *outstream;
     if(use_stdout)
       outstream = &cout;
     else
-      outstream = new ofstream(nargs[1]);
+      outstream = new ofstream(output);
 
     {
       if (formatter)
         formatter->open_array_section("objects");
       try {
-	librados::NObjectIterator i = io_ctx.nobjects_begin();
+	librados::NObjectIterator i = pgid ? io_ctx.nobjects_begin(pgid->ps()) : io_ctx.nobjects_begin();
 	librados::NObjectIterator i_end = io_ctx.nobjects_end();
 	for (; i != i_end; ++i) {
 	  if (use_striper) {
@@ -2233,6 +2248,11 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
 	    if (l <= 17 ||
 		(0 != i->get_oid().compare(l-17, 17,".0000000000000000"))) continue;
 	  }
+          if (pgid) {
+            uint32_t ps;
+            if (io_ctx.get_object_pg_hash_position2(i->get_oid(), &ps) || pgid->ps() != ps)
+              break;
+          }
 	  if (!formatter) {
 	    // Only include namespace in output when wildcard specified
 	    if (wildcard)
@@ -2812,7 +2832,7 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
 	cerr << "error reading " << pool_name << "/" << oid << ": " << cpp_strerror(ret) << std::endl;
 	goto out;
       }
-      bufferlist::iterator p = outdata.begin();
+      auto p = outdata.cbegin();
       bufferlist header;
       map<string, bufferlist> kv;
       try {
@@ -2865,7 +2885,7 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
     }
     bufferlist hdr;
     map<string, bufferlist> kv;
-    bufferlist::iterator p = bl.begin();
+    auto p = bl.cbegin();
     try {
       decode(hdr, p);
       decode(kv, p);
@@ -3198,7 +3218,7 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
     if (replybl.length()) {
       map<pair<uint64_t,uint64_t>,bufferlist> rm;
       set<pair<uint64_t,uint64_t> > missed;
-      bufferlist::iterator p = replybl.begin();
+      auto p = replybl.cbegin();
       decode(rm, p);
       decode(missed, p);
       for (map<pair<uint64_t,uint64_t>,bufferlist>::iterator p = rm.begin();
@@ -3677,6 +3697,19 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
 	   << cpp_strerror(ret) << std::endl;
       goto out;
     }
+  } else if (strcmp(nargs[0], "unset-manifest") == 0) {
+    if (!pool_name || nargs.size() < 2)
+      usage_exit();
+    string oid(nargs[1]);
+
+    ObjectWriteOperation op;
+    op.unset_manifest();
+    ret = io_ctx.operate(oid, &op);
+    if (ret < 0) {
+      cerr << "error unset-manifest " << pool_name << "/" << oid << " : " 
+	   << cpp_strerror(ret) << std::endl;
+      goto out;
+    }
   } else if (strcmp(nargs[0], "export") == 0) {
     // export [filename]
     if (!pool_name || nargs.size() > 2) {
@@ -3923,6 +3956,8 @@ int main(int argc, const char **argv)
       opts["omap-key-file"] = val;
     } else if (ceph_argparse_flag(args, i, "--with-reference", (char*)NULL)) {
       opts["with-reference"] = "true";
+    } else if (ceph_argparse_witharg(args, i, &val, "--pgid", (char*)NULL)) {
+      opts["pgid"] = val;
     } else {
       if (val[0] == '-')
         usage_exit();

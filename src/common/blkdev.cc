@@ -1,3 +1,5 @@
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
+// vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
  *
@@ -17,10 +19,12 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <dirent.h>
+//#include "common/debug.h"
 #include "include/uuid.h"
 #include "blkdev.h"
 
 #ifdef __linux__
+#include <libudev.h>
 #include <linux/fs.h>
 #include <blkid/blkid.h>
 
@@ -30,6 +34,8 @@
 #define UUID_LEN 36
 
 static const char *sandbox_dir = "";
+
+static std::string get_block_device_string_property_wrap(const std::string &devname, const std::string &property); 
 
 void set_block_device_sandbox_dir(const char *dir)
 {
@@ -89,7 +95,10 @@ int get_block_device_base(const char *dev, char *out, size_t out_len)
     if (*p == '/')
       *p = '!';
 
-  snprintf(fn, sizeof(fn), "%s/sys/block/%s", sandbox_dir, devname);
+  if (static_cast<size_t>(snprintf(fn, sizeof(fn), "%s/sys/block/%s",
+                                   sandbox_dir, devname))
+      >= sizeof(fn))
+    return -ERANGE;
   if (stat(fn, &st) == 0) {
     if (strlen(devname) + 1 > out_len) {
       return -ERANGE;
@@ -107,8 +116,10 @@ int get_block_device_base(const char *dev, char *out, size_t out_len)
   while ((de = ::readdir(dir))) {
     if (de->d_name[0] == '.')
       continue;
-    snprintf(fn, sizeof(fn), "%s/sys/block/%s/%s", sandbox_dir, de->d_name,
-	     devname);
+    if (static_cast<size_t>(snprintf(fn, sizeof(fn), "%s/sys/block/%s/%s",
+                                     sandbox_dir, de->d_name,
+                                     devname)) >= sizeof(fn))
+      return -ERANGE;
 
     if (stat(fn, &st) == 0) {
       // match!
@@ -204,48 +215,19 @@ bool block_device_is_rotational(const char *devname)
   return get_block_device_int_property(devname, "queue/rotational") > 0;
 }
 
+int block_device_vendor(const char *devname, char *vendor, size_t max)
+{
+  return get_block_device_string_property(devname, "device/vendor", vendor, max);
+}
+
 int block_device_model(const char *devname, char *model, size_t max)
 {
   return get_block_device_string_property(devname, "device/model", model, max);
 }
 
-int get_device_by_uuid(uuid_d dev_uuid, const char* label, char* partition,
-	char* device)
+int block_device_serial(const char *devname, char *serial, size_t max)
 {
-  char uuid_str[UUID_LEN+1];
-  char basename[PATH_MAX];
-  const char* temp_partition_ptr = NULL;
-  blkid_cache cache = NULL;
-  blkid_dev dev = NULL;
-  int rc = 0;
-
-  dev_uuid.print(uuid_str);
-
-  if (blkid_get_cache(&cache, NULL) >= 0)
-    dev = blkid_find_dev_with_tag(cache, label, (const char*)uuid_str);
-  else
-    return -EINVAL;
-
-  if (dev) {
-    temp_partition_ptr = blkid_dev_devname(dev);
-    strncpy(partition, temp_partition_ptr, PATH_MAX);
-    rc = get_block_device_base(partition, basename,
-      sizeof(basename));
-    if (rc >= 0) {
-      strncpy(device, basename, sizeof(basename));
-      rc = 0;
-    } else {
-      rc = -ENODEV;
-    }
-  } else {
-    rc = -EINVAL;
-  }
-
-  /* From what I can tell, blkid_put_cache cleans up dev, which
-   * appears to be a pointer into cache, as well */
-  if (cache)
-    blkid_put_cache(cache);
-  return rc;
+  return get_block_device_string_property(devname, "device/serial", serial, max);
 }
 
 int get_device_by_fd(int fd, char *partition, char *device, size_t max)
@@ -391,6 +373,69 @@ bool get_vdo_utilization(int fd, uint64_t *total, uint64_t *avail)
   return true;
 }
 
+// trying to use udev first, and if it doesn't work, we fall back to 
+// reading /sys/block/$devname/device/(vendor/model/serial).
+std::string get_device_id(const std::string& devname)
+{
+  struct udev_device *dev;
+  static struct udev *udev;
+  const char *data;
+  std::string device_id;
+
+  udev = udev_new();
+  if (!udev) {
+    return {};
+  }
+  dev = udev_device_new_from_subsystem_sysname(udev, "block", devname.c_str());
+  if (!dev) {
+    udev_unref(udev);
+    return {};
+  }
+
+  // "ID_SERIAL_SHORT" returns only the serial number;
+  // "ID_SERIAL" returns vendor model_serial.
+  data = udev_device_get_property_value(dev, "ID_SERIAL");
+  if (data) {
+    device_id = data;
+  }
+
+  udev_device_unref(dev);
+  udev_unref(udev);
+
+  if (!device_id.empty()) {
+    std::replace(device_id.begin(), device_id.end(), ' ', '_');
+    return device_id;
+  }
+
+  // either udev_device_get_property_value() failed, or succeeded but
+  // returned nothing; trying to read from files.  note that the 'vendor'
+  // file rarely contains the actual vendor; it's usually 'ATA'.
+  std::string model, serial;
+  model = get_block_device_string_property_wrap(devname, "device/model");
+  serial = get_block_device_string_property_wrap(devname, "device/serial");
+
+  if (!model.size() || serial.size()) {
+    return {};
+  }
+
+  device_id = model + "_" + serial;
+  std::replace(device_id.begin(), device_id.end(), ' ', '_');
+  return device_id;
+}
+
+std::string get_block_device_string_property_wrap(const std::string &devname,
+						  const std::string &property)
+{
+  char buff[1024] = {0};
+  std::string prop_val;
+  int ret = get_block_device_string_property(devname.c_str(), property.c_str(), buff, sizeof(buff));
+  if (ret < 0) {
+    return {};
+  }
+  prop_val = buff;
+  return prop_val;
+}
+
 #elif defined(__APPLE__)
 #include <sys/disk.h>
 
@@ -422,12 +467,6 @@ int block_device_discard(int fd, int64_t offset, int64_t len)
 bool block_device_is_rotational(const char *devname)
 {
   return false;
-}
-
-int get_device_by_uuid(uuid_d dev_uuid, const char* label, char* partition,
-	char* device)
-{
-  return -EOPNOTSUPP;
 }
 
 void get_dm_parents(const std::string& dev, std::set<std::string> *ls)
@@ -475,11 +514,6 @@ bool block_device_is_rotational(const char *devname)
   return false;
 }
 
-int get_device_by_uuid(uuid_d dev_uuid, const char* label, char* partition,
-	char* device)
-{
-  return -EOPNOTSUPP;
-}
 int get_device_by_fd(int fd, char *partition, char *device, size_t max)
 {
   return -EOPNOTSUPP;
@@ -502,6 +536,12 @@ int64_t get_vdo_stat(int fd, const char *property)
 bool get_vdo_utilization(int fd, uint64_t *total, uint64_t *avail)
 {
   return false;
+}
+
+std::string get_device_id(const std::string& devname)
+{
+  // FIXME: implement me for freebsd
+  return std::string();
 }
 
 #else
@@ -525,12 +565,6 @@ bool block_device_is_rotational(const char *devname)
   return false;
 }
 
-int get_device_by_uuid(uuid_d dev_uuid, const char* label, char* partition,
-	char* device)
-{
-  return -EOPNOTSUPP;
-}
-
 int get_device_by_fd(int fd, char *partition, char *device, size_t max)
 {
   return -EOPNOTSUPP;
@@ -553,4 +587,11 @@ bool get_vdo_utilization(int fd, uint64_t *total, uint64_t *avail)
 {
   return false;
 }
+
+std::string get_device_id(const std::string& devname)
+{
+  // not implemented
+  return std::string();
+}
+
 #endif

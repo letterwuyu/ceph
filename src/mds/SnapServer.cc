@@ -60,6 +60,7 @@ void SnapServer::reset_state()
   }
   last_created = last_snap;
   last_destroyed = last_snap;
+  snaprealm_v2_since = last_snap + 1;
   version++;
 }
 
@@ -70,7 +71,7 @@ void SnapServer::_prepare(bufferlist &bl, uint64_t reqid, mds_rank_t bymds)
 {
   using ceph::decode;
   using ceph::encode;
-  bufferlist::iterator p = bl.begin();
+  auto p = bl.cbegin();
   __u32 op;
   decode(op, p);
 
@@ -120,8 +121,6 @@ void SnapServer::_prepare(bufferlist &bl, uint64_t reqid, mds_rank_t bymds)
       decode(info.name, p);
       decode(info.stamp, p);
 
-      // bump last_snap... we use it as a version value on the snaprealm.
-      ++last_snap;
       pending_update[version] = info;
       dout(10) << "prepare v" << version << " update " << info << dendl;
 
@@ -235,7 +234,7 @@ void SnapServer::_rollback(version_t tid)
 void SnapServer::_server_update(bufferlist& bl)
 {
   using ceph::decode;
-  bufferlist::iterator p = bl.begin();
+  auto p = bl.cbegin();
   map<int, vector<snapid_t> > purge;
   decode(purge, p);
 
@@ -278,7 +277,7 @@ void SnapServer::handle_query(MMDSTableRequest *req)
   using ceph::encode;
   using ceph::decode;
   char op;
-  bufferlist::iterator p = req->bl.begin();
+  auto p = req->bl.cbegin();
   decode(op, p);
 
   MMDSTableRequest *reply = new MMDSTableRequest(table, TABLESERVER_OP_QUERY_REPLY, req->reqid, version);

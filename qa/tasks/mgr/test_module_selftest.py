@@ -26,10 +26,12 @@ class TestModuleSelftest(MgrTestCase):
         self.setup_mgrs()
 
     def _selftest_plugin(self, module_name):
+        self._load_module("selftest")
         self._load_module(module_name)
 
-        # Execute the module's self-test routine
-        self.mgr_cluster.mon_manager.raw_cluster_cmd(module_name, "self-test")
+        # Execute the module's self_test() method
+        self.mgr_cluster.mon_manager.raw_cluster_cmd(
+                "mgr", "self-test", "module", module_name)
 
     def test_zabbix(self):
         # Set these mandatory config fields so that the zabbix module
@@ -45,12 +47,31 @@ class TestModuleSelftest(MgrTestCase):
     def test_influx(self):
         self._selftest_plugin("influx")
 
+    def test_telegraf(self):
+        self._selftest_plugin("telegraf")
+
     def test_iostat(self):
         self._selftest_plugin("iostat")
+
+    def test_devicehealth(self):
+        self._selftest_plugin("devicehealth")
+        # Clean up the pool that the module creates, because otherwise
+        # it's low PG count causes test failures.
+        pool_name = "device_health_metrics"
+        self.mgr_cluster.mon_manager.raw_cluster_cmd(
+                "osd", "pool", "delete", pool_name, pool_name,
+                "--yes-i-really-really-mean-it")
+
 
     def test_selftest_run(self):
         self._load_module("selftest")
         self.mgr_cluster.mon_manager.raw_cluster_cmd("mgr", "self-test", "run")
+
+    def test_telemetry(self):
+        self._selftest_plugin("telemetry")
+
+    def test_crash(self):
+        self._selftest_plugin("crash")
 
     def test_selftest_config_update(self):
         """
@@ -172,6 +193,8 @@ class TestModuleSelftest(MgrTestCase):
         # Use the dashboard to test that the mgr is still able to do its job
         self._assign_ports("dashboard", "server_port")
         self._load_module("dashboard")
+        self.mgr_cluster.mon_manager.raw_cluster_cmd("dashboard",
+                                                     "create-self-signed-cert")
 
         original_active = self.mgr_cluster.get_active_id()
         original_standbys = self.mgr_cluster.get_standby_ids()
@@ -187,7 +210,7 @@ class TestModuleSelftest(MgrTestCase):
         for i in range(0, periods):
             t1 = time.time()
             # Check that an HTTP module remains responsive
-            r = requests.get(dashboard_uri)
+            r = requests.get(dashboard_uri, verify=False)
             self.assertEqual(r.status_code, 200)
 
             # Check that a native non-module command remains responsive
@@ -253,3 +276,16 @@ class TestModuleSelftest(MgrTestCase):
             "mgr", "module", "disable", "selftest")
 
         self.wait_for_health_clear(timeout=30)
+
+    def test_module_remote(self):
+        """
+        Use the selftest module to exercise inter-module communication
+        """
+        self._load_module("selftest")
+        # The "self-test remote" operation just happens to call into
+        # influx.
+        self._load_module("influx")
+
+        self.mgr_cluster.mon_manager.raw_cluster_cmd(
+            "mgr", "self-test", "remote")
+

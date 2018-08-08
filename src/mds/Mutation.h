@@ -20,6 +20,7 @@
 #include "include/filepath.h"
 
 #include "MDSCacheObject.h"
+#include "MDSContext.h"
 
 #include "SimpleLock.h"
 #include "Capability.h"
@@ -245,8 +246,7 @@ struct MDRequestImpl : public MutationImpl {
     bool is_remote_frozen_authpin;
     bool is_inode_exporter;
 
-    map<client_t,entity_inst_t> imported_client_map;
-    map<client_t,uint64_t> sseq_map;
+    map<client_t, pair<Session*, uint64_t> > imported_session_map;
     map<CInode*, map<client_t,Capability::Export> > cap_imports;
     
     // for lock/flock
@@ -263,7 +263,7 @@ struct MDRequestImpl : public MutationImpl {
     Context *slave_commit;
     bufferlist rollback_bl;
 
-    list<MDSInternalContextBase*> waiting_for_finish;
+    MDSInternalContextBase::vec waiting_for_finish;
 
     // export & fragment
     CDir* export_dir;

@@ -136,7 +136,7 @@ public:
     { }
 
     template <typename... Args>
-    IndexedLog(Args&&... args) :
+    explicit IndexedLog(Args&&... args) :
       pg_log_t(std::forward<Args>(args)...),
       complete_to(log.end()),
       last_requested(0),
@@ -704,7 +704,9 @@ public:
 
   void trim(
     eversion_t trim_to,
-    pg_info_t &info);
+    pg_info_t &info,
+    bool transaction_applied = true,
+    bool async = false);
 
   void roll_forward_to(
     eversion_t roll_forward_to,
@@ -1309,7 +1311,7 @@ public:
 	if (p->key()[0] == '_')
 	  continue;
 	bufferlist bl = p->value();//Copy bufferlist before creating iterator
-	bufferlist::iterator bp = bl.begin();
+	auto bp = bl.cbegin();
 	if (p->key() == "divergent_priors") {
 	  decode(divergent_priors, bp);
 	  ldpp_dout(dpp, 20) << "read_log_and_missing " << divergent_priors.size()

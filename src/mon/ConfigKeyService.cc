@@ -199,9 +199,9 @@ bool ConfigKeyService::service_dispatch(MonOpRequestRef op)
     return false;
   }
 
-  cmd_getval(g_ceph_context, cmdmap, "prefix", prefix);
+  cmd_getval_throws(g_ceph_context, cmdmap, "prefix", prefix);
   string key;
-  cmd_getval(g_ceph_context, cmdmap, "key", key);
+  cmd_getval_throws(g_ceph_context, cmdmap, "key", key);
 
   if (prefix == "config-key get") {
     ret = store_get(key, rdata);
@@ -222,17 +222,17 @@ bool ConfigKeyService::service_dispatch(MonOpRequestRef op)
 
     bufferlist data;
     string val;
-    if (cmd_getval(g_ceph_context, cmdmap, "val", val)) {
+    if (cmd_getval_throws(g_ceph_context, cmdmap, "val", val)) {
       // they specified a value in the command instead of a file
       data.append(val);
     } else if (cmd->get_data_len() > 0) {
       // they specified '-i <file>'
       data = cmd->get_data();
     }
-    if (data.length() > (size_t) g_conf->mon_config_key_max_entry_size) {
+    if (data.length() > (size_t) g_conf()->mon_config_key_max_entry_size) {
       ret = -EFBIG; // File too large
       ss << "error: entry size limited to "
-         << g_conf->mon_config_key_max_entry_size << " bytes. "
+         << g_conf()->mon_config_key_max_entry_size << " bytes. "
          << "Use 'mon config key max entry size' to manually adjust";
       goto out;
     }
@@ -293,7 +293,7 @@ bool ConfigKeyService::service_dispatch(MonOpRequestRef op)
 
   } else if (prefix == "config-key dump") {
     string prefix;
-    cmd_getval(g_ceph_context, cmdmap, "key", prefix);
+    cmd_getval_throws(g_ceph_context, cmdmap, "key", prefix);
     stringstream tmp_ss;
     store_dump(tmp_ss, prefix);
     rdata.append(tmp_ss);

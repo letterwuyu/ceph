@@ -1318,6 +1318,17 @@ int Operations<I>::update_features(uint64_t features, bool enabled) {
     lderr(cct) << "cannot update immutable features" << dendl;
     return -EINVAL;
   }
+
+  bool set_object_map = (features & RBD_FEATURE_OBJECT_MAP) == RBD_FEATURE_OBJECT_MAP;
+  bool set_fast_diff = (features & RBD_FEATURE_FAST_DIFF) == RBD_FEATURE_FAST_DIFF;
+  bool exist_fast_diff = (m_image_ctx.features & RBD_FEATURE_FAST_DIFF) != 0;
+  bool exist_object_map = (m_image_ctx.features & RBD_FEATURE_OBJECT_MAP) != 0;
+
+  if ((enabled && ((set_object_map && !exist_fast_diff) || (set_fast_diff && !exist_object_map)))
+      || (!enabled && (set_object_map && exist_fast_diff))) {
+    features |= (RBD_FEATURE_OBJECT_MAP | RBD_FEATURE_FAST_DIFF);
+  }
+
   if (features == 0) {
     lderr(cct) << "update requires at least one feature" << dendl;
     return -EINVAL;
@@ -1403,7 +1414,7 @@ int Operations<I>::metadata_set(const std::string &key,
   bool config_override = util::is_metadata_config_override(key, &config_key);
   if (config_override) {
     // validate config setting
-    int r = md_config_t().set_val(config_key.c_str(), value);
+    int r = ConfigProxy{false}.set_val(config_key.c_str(), value);
     if (r < 0) {
       return r;
     }

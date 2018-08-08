@@ -41,7 +41,7 @@ MgrStandby::MgrStandby(int argc, const char **argv) :
   monc{g_ceph_context},
   client_messenger(Messenger::create(
 		     g_ceph_context,
-		     cct->_conf->get_val<std::string>("ms_type"),
+		     cct->_conf.get_val<std::string>("ms_type"),
 		     entity_name_t::MGR(),
 		     "mgr",
 		     getpid(),
@@ -84,7 +84,7 @@ const char** MgrStandby::get_tracked_conf_keys() const
 }
 
 void MgrStandby::handle_conf_change(
-  const struct md_config_t *conf,
+  const ConfigProxy& conf,
   const std::set <std::string> &changed)
 {
   if (changed.count("clog_to_monitors") ||
@@ -180,7 +180,7 @@ int MgrStandby::init()
 void MgrStandby::send_beacon()
 {
   assert(lock.is_locked_by_me());
-  dout(1) << state_str() << dendl;
+  dout(4) << state_str() << dendl;
 
   std::list<PyModuleRef> modules = py_module_registry.get_modules();
 
@@ -188,6 +188,10 @@ void MgrStandby::send_beacon()
   // which we will transmit to the monitor.
   std::vector<MgrMap::ModuleInfo> module_info;
   for (const auto &module : modules) {
+    // do not announce always_on modules to the monitor
+    if (module->is_always_on()) {
+      continue;
+    }
     MgrMap::ModuleInfo info;
     info.name = module->get_name();
     info.error_string = module->get_error_string();
@@ -199,7 +203,7 @@ void MgrStandby::send_beacon()
   // as available in the map)
   bool available = active_mgr != nullptr && active_mgr->is_initialized();
 
-  auto addr = available ? active_mgr->get_server_addr() : entity_addr_t();
+  auto addrs = available ? active_mgr->get_server_addrs() : entity_addrvec_t();
   dout(10) << "sending beacon as gid " << monc.get_global_id() << dendl;
 
   map<string,string> metadata;
@@ -208,8 +212,8 @@ void MgrStandby::send_beacon()
 
   MMgrBeacon *m = new MMgrBeacon(monc.get_fsid(),
 				 monc.get_global_id(),
-                                 g_conf->name.get_id(),
-                                 addr,
+                                 g_conf()->name.get_id(),
+                                 addrs,
                                  available,
 				 std::move(module_info),
 				 std::move(metadata));
@@ -243,7 +247,7 @@ void MgrStandby::tick()
   }
 
   timer.add_event_after(
-      g_conf->get_val<std::chrono::seconds>("mgr_tick_period").count(),
+      g_conf().get_val<std::chrono::seconds>("mgr_tick_period").count(),
       new FunctionContext([this](int r){
           tick();
       }
@@ -396,11 +400,11 @@ void MgrStandby::handle_mgr_map(MMgrMap* mmap)
     derr << "I was active but no longer am" << dendl;
     respawn();
   } else {
-    if (map.active_gid != 0 && map.active_name != g_conf->name.get_id()) {
+    if (map.active_gid != 0 && map.active_name != g_conf()->name.get_id()) {
       // I am the standby and someone else is active, start modules
       // in standby mode to do redirects if needed
       if (!py_module_registry.is_standby_running()) {
-        py_module_registry.standby_start();
+        py_module_registry.standby_start(monc);
       }
     }
   }

@@ -99,7 +99,7 @@ struct RGWCurlHandle {
   mono_time lastuse;
   CURL* h;
 
-  RGWCurlHandle(CURL* h) : uses(0), h(h) {};
+  explicit RGWCurlHandle(CURL* h) : uses(0), h(h) {};
   CURL* operator*() {
     return this->h;
   }
@@ -493,6 +493,8 @@ int RGWHTTPClient::init_request(rgw_http_req_data *_req_data, bool send_data_hin
   curl_easy_setopt(easy_handle, CURLOPT_WRITEFUNCTION, receive_http_data);
   curl_easy_setopt(easy_handle, CURLOPT_WRITEDATA, (void *)req_data);
   curl_easy_setopt(easy_handle, CURLOPT_ERRORBUFFER, (void *)req_data->error_buf);
+  curl_easy_setopt(easy_handle, CURLOPT_LOW_SPEED_TIME, cct->_conf->rgw_curl_low_speed_time);
+  curl_easy_setopt(easy_handle, CURLOPT_LOW_SPEED_LIMIT, cct->_conf->rgw_curl_low_speed_limit);
   if (h) {
     curl_easy_setopt(easy_handle, CURLOPT_HTTPHEADER, (void *)h);
   }
@@ -531,14 +533,20 @@ int RGWHTTPClient::wait()
   return req_data->ret;
 }
 
-RGWHTTPClient::~RGWHTTPClient()
+void RGWHTTPClient::cancel()
 {
   if (req_data) {
     RGWHTTPManager *http_manager = req_data->mgr;
     if (http_manager) {
       http_manager->remove_request(this);
     }
+  }
+}
 
+RGWHTTPClient::~RGWHTTPClient()
+{
+  cancel();
+  if (req_data) {
     req_data->put();
   }
 }
@@ -546,7 +554,7 @@ RGWHTTPClient::~RGWHTTPClient()
 
 int RGWHTTPHeadersCollector::receive_header(void * const ptr, const size_t len)
 {
-  const boost::string_ref header_line(static_cast<const char * const>(ptr), len);
+  const boost::string_ref header_line(static_cast<const char *>(ptr), len);
 
   /* We're tokening the line that way due to backward compatibility. */
   const size_t sep_loc = header_line.find_first_of(" \t:");
@@ -784,13 +792,17 @@ void RGWHTTPManager::register_request(rgw_http_req_data *req_data)
   ldout(cct, 20) << __func__ << " mgr=" << this << " req_data->id=" << req_data->id << ", curl_handle=" << req_data->curl_handle << dendl;
 }
 
-void RGWHTTPManager::unregister_request(rgw_http_req_data *req_data)
+bool RGWHTTPManager::unregister_request(rgw_http_req_data *req_data)
 {
   RWLock::WLocker rl(reqs_lock);
+  if (!req_data->registered) {
+    return false;
+  }
   req_data->get();
   req_data->registered = false;
   unregistered_reqs.push_back(req_data);
   ldout(cct, 20) << __func__ << " mgr=" << this << " req_data->id=" << req_data->id << ", curl_handle=" << req_data->curl_handle << dendl;
+  return true;
 }
 
 void RGWHTTPManager::complete_request(rgw_http_req_data *req_data)
@@ -960,7 +972,9 @@ int RGWHTTPManager::remove_request(RGWHTTPClient *client)
     unlink_request(req_data);
     return 0;
   }
-  unregister_request(req_data);
+  if (!unregister_request(req_data)) {
+    return 0;
+  }
   int ret = signal_thread();
   if (ret < 0) {
     return ret;
@@ -1137,6 +1151,9 @@ void *RGWHTTPManager::reqs_thread_entry()
         switch (result) {
           case CURLE_OK:
             break;
+          case CURLE_OPERATION_TIMEDOUT:
+            dout(0) << "WARNING: curl operation timed out, network average transfer speed less than " 
+              << cct->_conf->rgw_curl_low_speed_limit << " Bytes per second during " << cct->_conf->rgw_curl_low_speed_time << " seconds." << dendl;
           default:
             dout(20) << "ERROR: msg->data.result=" << result << " req_data->id=" << id << " http_status=" << http_status << dendl;
 	    break;

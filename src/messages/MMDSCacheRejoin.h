@@ -29,7 +29,7 @@
 
 class MMDSCacheRejoin : public Message {
 
-  static const int HEAD_VERSION = 1;
+  static const int HEAD_VERSION = 2;
   static const int COMPAT_VERSION = 1;
 
  public:
@@ -62,7 +62,7 @@ class MMDSCacheRejoin : public Message {
       encode(nestlock, bl);
       encode(dftlock, bl);
     }
-    void decode(bufferlist::iterator &bl) {
+    void decode(bufferlist::const_iterator &bl) {
       using ceph::decode;
       decode(nonce, bl);
       decode(caps_wanted, bl);
@@ -83,7 +83,7 @@ class MMDSCacheRejoin : public Message {
       encode(nonce, bl);
       encode(dir_rep, bl);
     }
-    void decode(bufferlist::iterator &bl) {
+    void decode(bufferlist::const_iterator &bl) {
       using ceph::decode;
       decode(nonce, bl);
       decode(dir_rep, bl);
@@ -114,7 +114,7 @@ class MMDSCacheRejoin : public Message {
       encode(nonce, bl);
       encode(lock, bl);
     }
-    void decode(bufferlist::iterator &bl) {
+    void decode(bufferlist::const_iterator &bl) {
       using ceph::decode;
       decode(first, bl);
       decode(ino, bl);
@@ -136,7 +136,7 @@ class MMDSCacheRejoin : public Message {
       encode(first, bl);
       encode(ino, bl);
     }
-    void decode(bufferlist::iterator &bl) {
+    void decode(bufferlist::const_iterator &bl) {
       using ceph::decode;
       decode(first, bl);
       decode(ino, bl);
@@ -155,7 +155,7 @@ class MMDSCacheRejoin : public Message {
       encode(nest, bl);
       encode(dft, bl);
     }
-    void decode(bufferlist::iterator& bl) {
+    void decode(bufferlist::const_iterator& bl) {
       using ceph::decode;
       decode(file, bl);
       decode(nest, bl);
@@ -178,6 +178,7 @@ class MMDSCacheRejoin : public Message {
   // open
   map<inodeno_t,map<client_t, cap_reconnect_t> > cap_exports;
   map<client_t, entity_inst_t> client_map;
+  map<client_t,client_metadata_t> client_metadata_map;
   bufferlist imported_caps;
 
   // full
@@ -197,7 +198,7 @@ class MMDSCacheRejoin : public Message {
       encode(reqid, bl);
       encode(attempt, bl);
     }
-    void decode(bufferlist::iterator& bl) {
+    void decode(bufferlist::const_iterator& bl) {
       using ceph::decode;
       decode(reqid, bl);
       decode(attempt, bl);
@@ -323,9 +324,10 @@ public:
     encode(strong_dentries, payload);
     encode(authpinned_dentries, payload);
     encode(xlocked_dentries, payload);
+    encode(client_metadata_map, payload);
   }
   void decode_payload() override {
-    bufferlist::iterator p = payload.begin();
+    auto p = payload.cbegin();
     using ceph::decode;
     decode(op, p);
     decode(strong_inodes, p);
@@ -347,6 +349,8 @@ public:
     decode(strong_dentries, p);
     decode(authpinned_dentries, p);
     decode(xlocked_dentries, p);
+    if (header.version >= 2)
+      decode(client_metadata_map, p);
   }
 
 };

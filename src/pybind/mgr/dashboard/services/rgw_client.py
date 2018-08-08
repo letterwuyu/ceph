@@ -2,12 +2,20 @@
 from __future__ import absolute_import
 
 import re
+from distutils.util import strtobool
 from ..awsauth import S3Auth
 from ..settings import Settings, Options
 from ..rest_client import RestClient, RequestException
 from ..tools import build_url, dict_contains_path
-from ..exceptions import NoCredentialsException
 from .. import mgr, logger
+
+
+class NoCredentialsException(RequestException):
+    def __init__(self):
+        super(NoCredentialsException, self).__init__(
+            'No RGW credentials found, '
+            'please consult the documentation on how to enable RGW for '
+            'the dashboard.')
 
 
 def _determine_rgw_addr():
@@ -83,47 +91,55 @@ class RgwClient(RestClient):
 
     @staticmethod
     def _load_settings():
-        if Settings.RGW_API_SCHEME and Settings.RGW_API_ACCESS_KEY and \
-                Settings.RGW_API_SECRET_KEY:
-            if Options.has_default_value('RGW_API_HOST') and \
-                    Options.has_default_value('RGW_API_PORT'):
-                host, port = _determine_rgw_addr()
-            else:
-                host, port = Settings.RGW_API_HOST, Settings.RGW_API_PORT
-        else:
+        # The API access key and secret key are mandatory for a minimal configuration.
+        if not (Settings.RGW_API_ACCESS_KEY and Settings.RGW_API_SECRET_KEY):
             logger.warning('No credentials found, please consult the '
                            'documentation about how to enable RGW for the '
                            'dashboard.')
             raise NoCredentialsException()
 
+        if Options.has_default_value('RGW_API_HOST') and \
+                Options.has_default_value('RGW_API_PORT'):
+            host, port = _determine_rgw_addr()
+        else:
+            host, port = Settings.RGW_API_HOST, Settings.RGW_API_PORT
+
         RgwClient._host = host
         RgwClient._port = port
         RgwClient._ssl = Settings.RGW_API_SCHEME == 'https'
         RgwClient._ADMIN_PATH = Settings.RGW_API_ADMIN_RESOURCE
-        RgwClient._SYSTEM_USERID = Settings.RGW_API_USER_ID
 
-        logger.info("Creating new connection for user: %s",
-                    Settings.RGW_API_USER_ID)
-        RgwClient._user_instances[RgwClient._SYSTEM_USERID] = \
-            RgwClient(Settings.RGW_API_USER_ID, Settings.RGW_API_ACCESS_KEY,
-                      Settings.RGW_API_SECRET_KEY)
+        # Create an instance using the configured settings.
+        instance = RgwClient(Settings.RGW_API_USER_ID,
+                             Settings.RGW_API_ACCESS_KEY,
+                             Settings.RGW_API_SECRET_KEY)
+
+        RgwClient._SYSTEM_USERID = instance.userid
+
+        # Append the instance to the internal map.
+        RgwClient._user_instances[RgwClient._SYSTEM_USERID] = instance
 
     @staticmethod
     def instance(userid):
         if not RgwClient._user_instances:
             RgwClient._load_settings()
+
         if not userid:
             userid = RgwClient._SYSTEM_USERID
+
         if userid not in RgwClient._user_instances:
-            logger.info("Creating new connection for user: %s", userid)
+            # Get the access and secret keys for the specified user.
             keys = RgwClient.admin_instance().get_user_keys(userid)
             if not keys:
-                raise Exception(
+                raise RequestException(
                     "User '{}' does not have any keys configured.".format(
                         userid))
 
-            RgwClient._user_instances[userid] = RgwClient(
-                userid, keys['access_key'], keys['secret_key'])
+            # Create an instance and append it to the internal map.
+            RgwClient._user_instances[userid] = RgwClient(userid,
+                                                          keys['access_key'],
+                                                          keys['secret_key'])
+
         return RgwClient._user_instances[userid]
 
     @staticmethod
@@ -155,29 +171,60 @@ class RgwClient(RestClient):
         port = port if port else RgwClient._port
         admin_path = admin_path if admin_path else RgwClient._ADMIN_PATH
         ssl = ssl if ssl else RgwClient._ssl
+        ssl_verify = Settings.RGW_API_SSL_VERIFY
 
-        self.userid = userid
         self.service_url = build_url(host=host, port=port)
         self.admin_path = admin_path
 
         s3auth = S3Auth(access_key, secret_key, service_url=self.service_url)
-        super(RgwClient, self).__init__(host, port, 'RGW', ssl, s3auth)
+        super(RgwClient, self).__init__(host, port, 'RGW', ssl, s3auth, ssl_verify=ssl_verify)
 
-        logger.info("Creating new connection")
+        # If user ID is not set, then try to get it via the RGW Admin Ops API.
+        self.userid = userid if userid else self._get_user_id(self.admin_path)
 
-    @RestClient.api_get('/', resp_structure='[0] > ID')
+        logger.info("Created new connection for user: %s", self.userid)
+
+    @RestClient.api_get('/', resp_structure='[0] > (ID & DisplayName)')
     def is_service_online(self, request=None):
-        response = request({'format': 'json'})
-        return response[0]['ID'] == 'online'
+        """
+        Consider the service as online if the response contains the
+        specified keys. Nothing more is checked here.
+        """
+        request({'format': 'json'})
+        return True
+
+    @RestClient.api_get('/{admin_path}/metadata/user?myself',
+                        resp_structure='data > user_id')
+    def _get_user_id(self, admin_path, request=None):
+        # pylint: disable=unused-argument
+        """
+        Get the user ID of the user that is used to communicate with the
+        RGW Admin Ops API.
+        :rtype: str
+        :return: The user ID of the user that is used to sign the
+                 RGW Admin Ops API calls.
+        """
+        response = request()
+        return response['data']['user_id']
 
     @RestClient.api_get('/{admin_path}/metadata/user', resp_structure='[+]')
-    def _is_system_user(self, admin_path, request=None):
+    def _user_exists(self, admin_path, request=None):
         # pylint: disable=unused-argument
         response = request()
         return self.userid in response
 
+    def user_exists(self):
+        return self._user_exists(self.admin_path)
+
+    @RestClient.api_get('/{admin_path}/metadata/user?key={userid}',
+                        resp_structure='data > system')
+    def _is_system_user(self, admin_path, userid, request=None):
+        # pylint: disable=unused-argument
+        response = request()
+        return strtobool(response['data']['system'])
+
     def is_system_user(self):
-        return self._is_system_user(self.admin_path)
+        return self._is_system_user(self.admin_path, self.userid)
 
     @RestClient.api_get(
         '/{admin_path}/user',
@@ -188,11 +235,11 @@ class RgwClient(RestClient):
         colon_idx = userid.find(':')
         user = userid if colon_idx == -1 else userid[:colon_idx]
         response = request({'uid': user})
-        for keys in response['keys']:
-            if keys['user'] == userid:
+        for key in response['keys']:
+            if key['user'] == userid:
                 return {
-                    'access_key': keys['access_key'],
-                    'secret_key': keys['secret_key']
+                    'access_key': key['access_key'],
+                    'secret_key': key['secret_key']
                 }
         return None
 

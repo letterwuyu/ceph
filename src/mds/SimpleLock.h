@@ -43,7 +43,6 @@ inline const char *get_lock_type_name(int t) {
   }
 }
 
-#include "include/memory.h"
 
 struct MutationImpl;
 typedef boost::intrusive_ptr<MutationImpl> MutationRef;
@@ -306,7 +305,7 @@ public:
   void finish_waiters(uint64_t mask, int r=0) {
     parent->finish_waiting(mask << get_wait_shift(), r);
   }
-  void take_waiting(uint64_t mask, list<MDSInternalContextBase*>& ls) {
+  void take_waiting(uint64_t mask, MDSInternalContextBase::vec& ls) {
     parent->take_waiting(mask << get_wait_shift(), ls);
   }
   void add_waiter(uint64_t mask, MDSInternalContextBase *c) {
@@ -325,7 +324,7 @@ public:
     //assert(!is_stable() || gather_set.size() == 0);  // gather should be empty in stable states.
     return s;
   }
-  void set_state_rejoin(int s, list<MDSInternalContextBase*>& waiters, bool survivor) {
+  void set_state_rejoin(int s, MDSInternalContextBase::vec& waiters, bool survivor) {
     assert(!get_parent()->is_auth());
 
     // If lock in the replica object was not in SYNC state when auth mds of the object failed.
@@ -569,7 +568,7 @@ public:
       encode(empty_gather_set, bl);
     ENCODE_FINISH(bl);
   }
-  void decode(bufferlist::iterator& p) {
+  void decode(bufferlist::const_iterator& p) {
     DECODE_START(2, p);
     decode(state, p);
     set<__s32> g;
@@ -583,14 +582,14 @@ public:
     using ceph::encode;
     encode(s, bl);
   }
-  void decode_state(bufferlist::iterator& p, bool is_new=true) {
+  void decode_state(bufferlist::const_iterator& p, bool is_new=true) {
     using ceph::decode;
     __s16 s;
     decode(s, p);
     if (is_new)
       state = s;
   }
-  void decode_state_rejoin(bufferlist::iterator& p, list<MDSInternalContextBase*>& waiters, bool survivor) {
+  void decode_state_rejoin(bufferlist::const_iterator& p, MDSInternalContextBase::vec& waiters, bool survivor) {
     __s16 s;
     using ceph::decode;
     decode(s, p);

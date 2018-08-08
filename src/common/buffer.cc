@@ -18,6 +18,8 @@
 
 #include <sys/uio.h>
 
+#include "include/types.h"
+#include "include/buffer_raw.h"
 #include "include/compat.h"
 #include "include/mempool.h"
 #include "armor.h"
@@ -29,7 +31,6 @@
 #include "common/valgrind.h"
 #include "common/deleter.h"
 #include "common/RWLock.h"
-#include "include/types.h"
 #include "include/spinlock.h"
 #include "include/scope_guard.h"
 
@@ -165,109 +166,6 @@ using namespace ceph;
   }
   buffer::error_code::error_code(int error) :
     buffer::malformed_input(cpp_strerror(error).c_str()), code(error) {}
-
-  class buffer::raw {
-  public:
-    char *data;
-    unsigned len;
-    std::atomic<unsigned> nref { 0 };
-    int mempool;
-
-    std::pair<size_t, size_t> last_crc_offset {std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()};
-    std::pair<uint32_t, uint32_t> last_crc_val;
-
-    mutable ceph::spinlock crc_spinlock;
-
-    explicit raw(unsigned l, int mempool=mempool::mempool_buffer_anon)
-      : data(NULL), len(l), nref(0), mempool(mempool) {
-      mempool::get_pool(mempool::pool_index_t(mempool)).adjust_count(1, len);
-    }
-    raw(char *c, unsigned l, int mempool=mempool::mempool_buffer_anon)
-      : data(c), len(l), nref(0), mempool(mempool) {
-      mempool::get_pool(mempool::pool_index_t(mempool)).adjust_count(1, len);
-    }
-    virtual ~raw() {
-      mempool::get_pool(mempool::pool_index_t(mempool)).adjust_count(
-	-1, -(int)len);
-    }
-
-    void _set_len(unsigned l) {
-      mempool::get_pool(mempool::pool_index_t(mempool)).adjust_count(
-	-1, -(int)len);
-      len = l;
-      mempool::get_pool(mempool::pool_index_t(mempool)).adjust_count(1, len);
-    }
-
-    void reassign_to_mempool(int pool) {
-      if (pool == mempool) {
-	return;
-      }
-      mempool::get_pool(mempool::pool_index_t(mempool)).adjust_count(
-	-1, -(int)len);
-      mempool = pool;
-      mempool::get_pool(mempool::pool_index_t(pool)).adjust_count(1, len);
-    }
-
-    void try_assign_to_mempool(int pool) {
-      if (mempool == mempool::mempool_buffer_anon) {
-	reassign_to_mempool(pool);
-      }
-    }
-
-private:
-    // no copying.
-    // cppcheck-suppress noExplicitConstructor
-    raw(const raw &other) = delete;
-    const raw& operator=(const raw &other) = delete;
-public:
-    virtual char *get_data() {
-      return data;
-    }
-    virtual raw* clone_empty() = 0;
-    raw *clone() {
-      raw *c = clone_empty();
-      memcpy(c->data, data, len);
-      return c;
-    }
-    virtual bool can_zero_copy() const {
-      return false;
-    }
-    virtual int zero_copy_to_fd(int fd, loff_t *offset) {
-      return -ENOTSUP;
-    }
-    virtual bool is_page_aligned() {
-      return ((long)data & ~CEPH_PAGE_MASK) == 0;
-    }
-    bool is_n_page_sized() {
-      return (len & ~CEPH_PAGE_MASK) == 0;
-    }
-    virtual bool is_shareable() {
-      // true if safe to reference/share the existing buffer copy
-      // false if it is not safe to share the buffer, e.g., due to special
-      // and/or registered memory that is scarce
-      return true;
-    }
-    bool get_crc(const pair<size_t, size_t> &fromto,
-         pair<uint32_t, uint32_t> *crc) const {
-      std::lock_guard<decltype(crc_spinlock)> lg(crc_spinlock);
-      if (last_crc_offset == fromto) {
-        *crc = last_crc_val;
-        return true;
-      }
-      return false;
-    }
-    void set_crc(const pair<size_t, size_t> &fromto,
-         const pair<uint32_t, uint32_t> &crc) {
-      std::lock_guard<decltype(crc_spinlock)> lg(crc_spinlock);
-      last_crc_offset = fromto;
-      last_crc_val = crc;
-    }
-    void invalidate_crc() {
-      std::lock_guard<decltype(crc_spinlock)> lg(crc_spinlock);
-      last_crc_offset.first = std::numeric_limits<size_t>::max();
-      last_crc_offset.second = std::numeric_limits<size_t>::max();
-    }
-  };
 
   /*
    * raw_combined is always placed within a single allocation along
@@ -929,7 +827,7 @@ public:
     return *this;
   }
 
-  void buffer::ptr::swap(ptr& other)
+  void buffer::ptr::swap(ptr& other) noexcept
   {
     raw *r = _raw;
     unsigned o = _off;
@@ -1076,6 +974,16 @@ public:
     assert(l <= unused_tail_length());
     char* c = _raw->data + _off + _len;
     maybe_inline_memcpy(c, p, l, 32);
+    _len += l;
+    return _len + _off;
+  }
+
+  unsigned buffer::ptr::append_zeros(unsigned l)
+  {
+    assert(_raw);
+    assert(l <= unused_tail_length());
+    char* c = _raw->data + _off + _len;
+    memset(c, 0, l);
     _len += l;
     return _len + _off;
   }
@@ -1506,7 +1414,7 @@ public:
 
   // -- buffer::list --
 
-  buffer::list::list(list&& other)
+  buffer::list::list(list&& other) noexcept
     : _buffers(std::move(other._buffers)),
       _len(other._len),
       _memcopy_count(other._memcopy_count),
@@ -1515,7 +1423,7 @@ public:
     other.clear();
   }
 
-  void buffer::list::swap(list& other)
+  void buffer::list::swap(list& other) noexcept
   {
     std::swap(_len, other._len);
     std::swap(_memcopy_count, other._memcopy_count);
@@ -1815,7 +1723,7 @@ public:
   void buffer::list::reserve(size_t prealloc)
   {
     if (append_buffer.unused_tail_length() < prealloc) {
-      append_buffer = buffer::create_in_mempool(prealloc, get_mempool());
+      append_buffer = buffer::create_page_aligned(prealloc);
       append_buffer.set_length(0);   // unused, so far.
     }
   }
@@ -1843,7 +1751,7 @@ public:
   {
     // steal the other guy's buffers
     for (std::list<buffer::ptr>::const_iterator i = bl.buffers().begin();
-        i != bl.buffers().end(); i++) {
+        i != bl.buffers().end(); ++i) {
       append(*i, 0, i->length());
     }
     bl.clear();
@@ -1994,9 +1902,17 @@ public:
   
   void buffer::list::append_zero(unsigned len)
   {
-    ptr bp(len);
-    bp.zero(false);
-    append(std::move(bp));
+    unsigned need = std::min(append_buffer.unused_tail_length(), len);
+    if (need) {
+      append_buffer.append_zeros(need);
+      append(append_buffer, append_buffer.length() - need, need);
+      len -= need;
+    }
+    if (len) {
+      ptr bp = buffer::create_page_aligned(len);
+      bp.zero(false);
+      append(std::move(bp));
+    }
   }
 
   
@@ -2342,15 +2258,14 @@ int buffer::list::write_file(const char *fn, int mode)
 
 static int do_writev(int fd, struct iovec *vec, uint64_t offset, unsigned veclen, unsigned bytes)
 {
-  ssize_t r = 0;
   while (bytes > 0) {
+    ssize_t r = 0;
 #ifdef HAVE_PWRITEV
     r = ::pwritev(fd, vec, veclen, offset);
 #else
     r = ::lseek64(fd, offset, SEEK_SET);
     if (r != offset) {
-      r = -errno;
-      return r;
+      return -errno;
     }
     r = ::writev(fd, vec, veclen);
 #endif
@@ -2577,9 +2492,8 @@ void buffer::list::hexdump(std::ostream &out, bool trailing_newline) const
   unsigned per = 16;
   bool was_zeros = false, did_star = false;
   for (unsigned o=0; o<length(); o += per) {
-    bool row_is_zeros = false;
     if (o + per < length()) {
-      row_is_zeros = true;
+      bool row_is_zeros = true;
       for (unsigned i=0; i<per && o+i<length(); i++) {
 	if ((*this)[o+i]) {
 	  row_is_zeros = false;

@@ -41,7 +41,7 @@ void RGWAsyncRadosProcessor::RGWWQ::_process(RGWAsyncRadosRequest *req, ThreadPo
 }
 
 void RGWAsyncRadosProcessor::RGWWQ::_dump_queue() {
-  if (!g_conf->subsys.should_gather<ceph_subsys_rgw, 20>()) {
+  if (!g_conf()->subsys.should_gather<ceph_subsys_rgw, 20>()) {
     return;
   }
   deque<RGWAsyncRadosRequest *>::iterator iter;
@@ -58,8 +58,8 @@ void RGWAsyncRadosProcessor::RGWWQ::_dump_queue() {
 RGWAsyncRadosProcessor::RGWAsyncRadosProcessor(RGWRados *_store, int num_threads)
   : store(_store), m_tp(store->ctx(), "RGWAsyncRadosProcessor::m_tp", "rados_async", num_threads),
     req_throttle(store->ctx(), "rgw_async_rados_ops", num_threads * 2),
-    req_wq(this, g_conf->rgw_op_thread_timeout,
-    g_conf->rgw_op_thread_suicide_timeout, &m_tp) {
+    req_wq(this, g_conf()->rgw_op_thread_timeout,
+    g_conf()->rgw_op_thread_suicide_timeout, &m_tp) {
 }
 
 void RGWAsyncRadosProcessor::start() {
@@ -616,6 +616,7 @@ int RGWAsyncStatRemoteObj::_send_request()
                        nullptr, /* const char *if_match, */
                        nullptr, /* const char *if_nomatch, */
                        pattrs,
+                       pheaders,
                        nullptr,
                        nullptr, /* string *ptag, */
                        petag); /* string *petag, */
@@ -656,7 +657,7 @@ int RGWAsyncRemoveObj::_send_request()
   /* decode policy */
   map<string, bufferlist>::iterator iter = state->attrset.find(RGW_ATTR_ACL);
   if (iter != state->attrset.end()) {
-    bufferlist::iterator bliter = iter->second.begin();
+    auto bliter = iter->second.cbegin();
     try {
       policy.decode(bliter);
     } catch (buffer::error& err) {

@@ -276,19 +276,27 @@ void req_info::rebuild_from(req_info& src)
 }
 
 
-req_state::req_state(CephContext* _cct, RGWEnv* e, RGWUserInfo* u)
+req_state::req_state(CephContext* _cct, RGWEnv* e, RGWUserInfo* u, uint64_t id)
   : cct(_cct), user(u),
-    info(_cct, e)
+    info(_cct, e), id(id)
 {
   enable_ops_log = e->get_enable_ops_log();
   enable_usage_log = e->get_enable_usage_log();
   defer_to_bucket_acls = e->get_defer_to_bucket_acls();
 
-  time = ceph_clock_now();
+  time = Clock::now();
 }
 
 req_state::~req_state() {
   delete formatter;
+}
+
+std::ostream& req_state::gen_prefix(std::ostream& out) const
+{
+  auto p = out.precision();
+  return out << "req " << id << ' '
+      << std::setprecision(3) << std::fixed << time_elapsed() // '0.123s'
+      << std::setprecision(p) << std::defaultfloat << ' ';
 }
 
 bool search_err(rgw_http_errors& errs, int err_no, int& http_ret, string& code)
@@ -1732,56 +1740,11 @@ bool RGWUserCaps::is_valid_cap_type(const string& tp)
   return false;
 }
 
-static ssize_t unescape_str(const string& s, ssize_t ofs, char esc_char, char special_char, string *dest)
-{
-  const char *src = s.c_str();
-  char dest_buf[s.size() + 1];
-  char *destp = dest_buf;
-  bool esc = false;
-
-  dest_buf[0] = '\0';
-
-  for (size_t i = ofs; i < s.size(); i++) {
-    char c = src[i];
-    if (!esc && c == esc_char) {
-      esc = true;
-      continue;
-    }
-    if (!esc && c == special_char) {
-      *destp = '\0';
-      *dest = dest_buf;
-      return (ssize_t)i + 1;
-    }
-    *destp++ = c;
-    esc = false;
-  }
-  *destp = '\0';
-  *dest = dest_buf;
-  return string::npos;
-}
-
-static void escape_str(const string& s, char esc_char, char special_char, string *dest)
-{
-  const char *src = s.c_str();
-  char dest_buf[s.size() * 2 + 1];
-  char *destp = dest_buf;
-
-  for (size_t i = 0; i < s.size(); i++) {
-    char c = src[i];
-    if (c == esc_char || c == special_char) {
-      *destp++ = esc_char;
-    }
-    *destp++ = c;
-  }
-  *destp++ = '\0';
-  *dest = dest_buf;
-}
-
 void rgw_pool::from_str(const string& s)
 {
-  size_t pos = unescape_str(s, 0, '\\', ':', &name);
+  size_t pos = rgw_unescape_str(s, 0, '\\', ':', &name);
   if (pos != string::npos) {
-    pos = unescape_str(s, pos, '\\', ':', &ns);
+    pos = rgw_unescape_str(s, pos, '\\', ':', &ns);
     /* ignore return; if pos != string::npos it means that we had a colon
      * in the middle of ns that wasn't escaped, we're going to stop there
      */
@@ -1791,16 +1754,16 @@ void rgw_pool::from_str(const string& s)
 string rgw_pool::to_str() const
 {
   string esc_name;
-  escape_str(name, '\\', ':', &esc_name);
+  rgw_escape_str(name, '\\', ':', &esc_name);
   if (ns.empty()) {
     return esc_name;
   }
   string esc_ns;
-  escape_str(ns, '\\', ':', &esc_ns);
+  rgw_escape_str(ns, '\\', ':', &esc_ns);
   return esc_name + ":" + esc_ns;
 }
 
-void rgw_raw_obj::decode_from_rgw_obj(bufferlist::iterator& bl)
+void rgw_raw_obj::decode_from_rgw_obj(bufferlist::const_iterator& bl)
 {
   using ceph::decode;
   rgw_obj old_obj;

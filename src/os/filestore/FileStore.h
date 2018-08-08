@@ -99,7 +99,7 @@ public:
   FSSuperblock() { }
 
   void encode(bufferlist &bl) const;
-  void decode(bufferlist::iterator &bl);
+  void decode(bufferlist::const_iterator &bl);
   void dump(Formatter *f) const;
   static void generate_test_instances(list<FSSuperblock*>& o);
 };
@@ -790,7 +790,7 @@ private:
 			       const SequencerPosition &spos);
 
   const char** get_tracked_conf_keys() const override;
-  void handle_conf_change(const struct md_config_t *conf,
+  void handle_conf_change(const ConfigProxy& conf,
                           const std::set <std::string> &changed) override;
   int set_throttle_params();
   float m_filestore_commit_timeout;

@@ -33,6 +33,7 @@ struct MDRequestImpl;
 
 #include "CInode.h"
 #include "Capability.h"
+#include "MDSContext.h"
 #include "msg/Message.h"
 
 enum {
@@ -123,9 +124,9 @@ public:
       state_seq++;
     }
   }
-  void decode(bufferlist::iterator &p);
-  void set_client_metadata(std::map<std::string, std::string> const &meta);
-  std::string get_human_name() const {return human_name;}
+  void decode(bufferlist::const_iterator &p);
+  void set_client_metadata(const client_metadata_t& meta);
+  const std::string& get_human_name() const {return human_name;}
 
   // Ephemeral state for tracking progress of capability recalls
   utime_t recalled_at;  // When was I asked to SESSION_RECALL?
@@ -201,7 +202,7 @@ public:
   // -- caps --
 private:
   version_t cap_push_seq;        // cap push seq #
-  map<version_t, list<MDSInternalContextBase*> > waitfor_flush; // flush session messages
+  map<version_t, MDSInternalContextBase::vec > waitfor_flush; // flush session messages
 
 public:
   xlist<Capability*> caps;     // inodes with caps; front=most recently used
@@ -216,12 +217,14 @@ public:
     waitfor_flush[get_push_seq()].push_back(c);
     return get_push_seq();
   }
-  void finish_flush(version_t seq, list<MDSInternalContextBase*>& ls) {
+  void finish_flush(version_t seq, MDSInternalContextBase::vec& ls) {
     while (!waitfor_flush.empty()) {
-      if (waitfor_flush.begin()->first > seq)
+      auto it = waitfor_flush.begin();
+      if (it->first > seq)
 	break;
-      ls.splice(ls.end(), waitfor_flush.begin()->second);
-      waitfor_flush.erase(waitfor_flush.begin());
+      auto& v = it->second;
+      ls.insert(ls.end(), v.begin(), v.end());
+      waitfor_flush.erase(it);
     }
   }
 
@@ -330,7 +333,11 @@ public:
     num_trim_flushes_warnings(0),
     num_trim_requests_warnings(0) { }
   ~Session() override {
-    assert(!item_session_list.is_on_list());
+    if (state == STATE_CLOSED) {
+      item_session_list.remove_myself();
+    } else {
+      assert(!item_session_list.is_on_list());
+    }
     while (!preopen_out_queue.empty()) {
       preopen_out_queue.front()->put();
       preopen_out_queue.pop_front();
@@ -397,7 +404,7 @@ public:
   virtual void encode_header(bufferlist *header_bl);
   virtual void decode_header(bufferlist &header_bl);
   virtual void decode_values(std::map<std::string, bufferlist> &session_vals);
-  virtual void decode_legacy(bufferlist::iterator& blp);
+  virtual void decode_legacy(bufferlist::const_iterator& blp);
   void dump(Formatter *f) const;
 
   void set_rank(mds_rank_t r)
@@ -443,7 +450,7 @@ protected:
 public:
   map<int,xlist<Session*>* > by_state;
   uint64_t set_state(Session *session, int state);
-  map<version_t, list<MDSInternalContextBase*> > commit_waiters;
+  map<version_t, MDSInternalContextBase::vec > commit_waiters;
 
   explicit SessionMap(MDSRank *m) : mds(m),
 		       projected(0), committing(0), committed(0),
@@ -490,7 +497,7 @@ public:
   }
 
   // sessions
-  void decode_legacy(bufferlist::iterator& blp) override;
+  void decode_legacy(bufferlist::const_iterator& blp) override;
   bool empty() const { return session_map.empty(); }
   const ceph::unordered_map<entity_name_t, Session*> &get_sessions() const
   {
@@ -542,13 +549,6 @@ public:
 
   void dump();
 
-  void get_client_set(set<client_t>& s) {
-    for (ceph::unordered_map<entity_name_t,Session*>::iterator p = session_map.begin();
-	 p != session_map.end();
-	 ++p)
-      if (p->second->info.inst.name.is_client())
-	s.insert(p->second->get_client());
-  }
   void get_client_session_set(set<Session*>& s) const {
     for (ceph::unordered_map<entity_name_t,Session*>::const_iterator p = session_map.begin();
 	 p != session_map.end();
@@ -557,11 +557,16 @@ public:
 	s.insert(p->second);
   }
 
-  void replay_open_sessions(map<client_t,entity_inst_t>& client_map) {
+  void replay_open_sessions(map<client_t,entity_inst_t>& client_map,
+			    map<client_t,client_metadata_t>& client_metadata_map) {
     for (map<client_t,entity_inst_t>::iterator p = client_map.begin(); 
 	 p != client_map.end(); 
 	 ++p) {
       Session *s = get_or_add_session(p->second);
+      auto q = client_metadata_map.find(p->first);
+      if (q != client_metadata_map.end())
+	s->info.client_metadata.merge(q->second);
+
       set_state(s, Session::STATE_OPEN);
       replay_dirty_session(s);
     }
@@ -593,7 +598,7 @@ public:
 
   // -- loading, saving --
   inodeno_t ino;
-  list<MDSInternalContextBase*> waiting_for_load;
+  MDSInternalContextBase::vec waiting_for_load;
 
   object_t get_object_name() const;
 

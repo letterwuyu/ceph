@@ -217,6 +217,7 @@ void MonCapGrant::expand_profile_mon(const EntityName& name) const
     profile_grants.push_back(MonCapGrant("osd", MON_CAP_R));  // read osdmap
     profile_grants.push_back(MonCapGrant("mon getmap"));
     profile_grants.push_back(MonCapGrant("osd new"));
+    profile_grants.push_back(MonCapGrant("osd purge-new"));
   }
   if (profile == "bootstrap-mds") {
     profile_grants.push_back(MonCapGrant("mon", MON_CAP_R));  // read monmap
@@ -424,7 +425,7 @@ void MonCap::encode(bufferlist& bl) const
   ENCODE_FINISH(bl);
 }
 
-void MonCap::decode(bufferlist::iterator& bl)
+void MonCap::decode(bufferlist::const_iterator& bl)
 {
   string s;
   DECODE_START(4, bl);

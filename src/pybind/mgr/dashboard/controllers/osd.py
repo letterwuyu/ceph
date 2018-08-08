@@ -1,17 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import
 
-import json
-
-from mgr_module import CommandResult
-
-from . import ApiController, AuthRequired, RESTController
-from .. import logger, mgr
+from . import ApiController, RESTController, UpdatePermission
+from .. import mgr, logger
+from ..security import Scope
 from ..services.ceph_service import CephService
+from ..services.exception import handle_send_command_error
+from ..tools import str_to_bool
 
 
-@ApiController('osd')
-@AuthRequired()
+@ApiController('/osd', Scope.OSD)
 class Osd(RESTController):
     def list(self):
         osds = self.get_osd_map()
@@ -51,22 +49,55 @@ class Osd(RESTController):
             osds[str(osd['id'])] = osd
         return osds
 
+    @handle_send_command_error('osd')
     def get(self, svc_id):
-        result = CommandResult('')
-        mgr.send_command(result, 'osd', svc_id,
-                         json.dumps({
-                             'prefix': 'perf histogram dump',
-                         }),
-                         '')
-        r, outb, outs = result.wait()
-        if r != 0:
-            logger.warning('Failed to load histogram for OSD %s', svc_id)
-            logger.debug(outs)
-            histogram = outs
-        else:
-            histogram = json.loads(outb)
+        histogram = CephService.send_command('osd', srv_spec=svc_id, prefix='perf histogram dump')
         return {
             'osd_map': self.get_osd_map()[svc_id],
             'osd_metadata': mgr.get_metadata('osd', svc_id),
             'histogram': histogram,
         }
+
+    @RESTController.Resource('POST', query_params=['deep'])
+    @UpdatePermission
+    def scrub(self, svc_id, deep=False):
+        api_scrub = "osd deep-scrub" if str_to_bool(deep) else "osd scrub"
+        CephService.send_command("mon", api_scrub, who=svc_id)
+
+
+@ApiController('/osd/flags', Scope.OSD)
+class OsdFlagsController(RESTController):
+    @staticmethod
+    def _osd_flags():
+        enabled_flags = mgr.get('osd_map')['flags_set']
+        if 'pauserd' in enabled_flags and 'pausewr' in enabled_flags:
+            # 'pause' is set by calling `ceph osd set pause` and unset by
+            # calling `set osd unset pause`, but `ceph osd dump | jq '.flags'`
+            # will contain 'pauserd,pausewr' if pause is set.
+            # Let's pretend to the API that 'pause' is in fact a proper flag.
+            enabled_flags = list(
+                set(enabled_flags) - {'pauserd', 'pausewr'} | {'pause'})
+        return sorted(enabled_flags)
+
+    def list(self):
+        return self._osd_flags()
+
+    def bulk_set(self, flags):
+        """
+        The `recovery_deletes` and `sortbitwise` flags cannot be unset.
+        `purged_snapshots` cannot even be set. It is therefore required to at
+        least include those three flags for a successful operation.
+        """
+        assert isinstance(flags, list)
+
+        enabled_flags = set(self._osd_flags())
+        data = set(flags)
+        added = data - enabled_flags
+        removed = enabled_flags - data
+        for flag in added:
+            CephService.send_command('mon', 'osd set', '', key=flag)
+        for flag in removed:
+            CephService.send_command('mon', 'osd unset', '', key=flag)
+        logger.info('Changed OSD flags: added=%s removed=%s', added, removed)
+
+        return sorted(enabled_flags - removed | added)

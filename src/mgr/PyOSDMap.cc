@@ -28,7 +28,7 @@ typedef struct {
 
 typedef struct {
   PyObject_HEAD
-  ceph::shared_ptr<CrushWrapper> crush;
+  std::shared_ptr<CrushWrapper> crush;
 } BasePyCRUSH;
 
 // ----------
@@ -377,7 +377,7 @@ static PyObject *osdmap_inc_set_compat_weight_set_weights(
 
   CrushWrapper crush;
   assert(self->inc->crush.length());  // see new_incremental
-  auto p = self->inc->crush.begin();
+  auto p = self->inc->crush.cbegin();
   decode(crush, p);
   crush.create_choose_args(CrushWrapper::DEFAULT_CHOOSE_ARGS, 1);
   for (auto i : wm) {
@@ -465,7 +465,7 @@ BasePyCRUSH_init(BasePyCRUSH *self,
     }
     assert(PyObject_TypeCheck(crush_capsule, &PyCapsule_Type));
 
-    auto ptr_ref = (ceph::shared_ptr<CrushWrapper>*)(
+    auto ptr_ref = (std::shared_ptr<CrushWrapper>*)(
         PyCapsule_GetPointer(crush_capsule, nullptr));
 
     // We passed a pointer to a shared pointer, which is weird, but

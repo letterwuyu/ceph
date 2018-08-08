@@ -236,8 +236,11 @@ struct ceph_mon_subscribe_ack {
 #define CEPH_MDSMAP_ALLOW_SNAPS                  (1<<1)  /* cluster allowed to create snapshots */
 /* deprecated #define CEPH_MDSMAP_ALLOW_MULTIMDS (1<<2) cluster allowed to have >1 active MDS */
 /* deprecated #define CEPH_MDSMAP_ALLOW_DIRFRAGS (1<<3) cluster allowed to fragment directories */
+#define CEPH_MDSMAP_ALLOW_MULTIMDS_SNAPS	 (1<<4)  /* cluster alllowed to enable MULTIMDS
+							    and SNAPS at the same time */
 
-#define CEPH_MDSMAP_DEFAULTS (0)
+#define CEPH_MDSMAP_DEFAULTS (CEPH_MDSMAP_ALLOW_SNAPS | \
+			      CEPH_MDSMAP_ALLOW_MULTIMDS_SNAPS)
 
 /*
  * mds states
@@ -364,7 +367,8 @@ enum {
 	CEPH_MDS_OP_FLUSH      = 0x01502,
 	CEPH_MDS_OP_ENQUEUE_SCRUB  = 0x01503,
 	CEPH_MDS_OP_REPAIR_FRAGSTATS = 0x01504,
-	CEPH_MDS_OP_REPAIR_INODESTATS = 0x01505
+	CEPH_MDS_OP_REPAIR_INODESTATS = 0x01505,
+	CEPH_MDS_OP_UPGRADE_SNAPREALM = 0x01506
 };
 
 extern const char *ceph_mds_op_name(int op);
@@ -392,6 +396,7 @@ extern const char *ceph_mds_op_name(int op);
 #define CEPH_O_CREAT           00000100
 #define CEPH_O_EXCL            00000200
 #define CEPH_O_TRUNC           00001000
+#define CEPH_O_LAZY            00020000
 #define CEPH_O_DIRECTORY       00200000
 #define CEPH_O_NOFOLLOW        00400000
 
@@ -750,6 +755,8 @@ int ceph_flags_to_mode(int flags);
 			   CEPH_CAP_LINK_EXCL |		\
 			   CEPH_CAP_XATTR_EXCL |	\
 			   CEPH_CAP_FILE_EXCL)
+#define CEPH_CAP_ANY_FILE_RD (CEPH_CAP_FILE_RD | CEPH_CAP_FILE_CACHE | \
+                              CEPH_CAP_FILE_SHARED)
 #define CEPH_CAP_ANY_FILE_WR (CEPH_CAP_FILE_WR | CEPH_CAP_FILE_BUFFER |	\
 			      CEPH_CAP_FILE_EXCL)
 #define CEPH_CAP_ANY_WR   (CEPH_CAP_ANY_EXCL | CEPH_CAP_ANY_FILE_WR)

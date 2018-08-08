@@ -198,6 +198,11 @@ namespace librbd {
     bool skip_partial_discard;
     bool blkin_trace_all;
     uint64_t qos_iops_limit;
+    uint64_t qos_bps_limit;
+    uint64_t qos_read_iops_limit;
+    uint64_t qos_write_iops_limit;
+    uint64_t qos_read_bps_limit;
+    uint64_t qos_write_bps_limit;
 
     LibrbdAdminSocketHook *asok_hook;
 
@@ -315,6 +320,8 @@ namespace librbd {
 
     journal::Policy *get_journal_policy() const;
     void set_journal_policy(journal::Policy *policy);
+
+    bool is_writeback_cache_enabled() const;
 
     static void get_thread_pool_instance(CephContext *cct,
                                          ThreadPool **thread_pool,

@@ -116,7 +116,7 @@ public:
       -1);
   }
   void encode(bufferlist &bl) const;
-  void decode(bufferlist::iterator &bl);
+  void decode(bufferlist::const_iterator &bl);
   void dump(Formatter *f) const;
   static void generate_test_instances(std::list<HashInfo*>& o);
   uint32_t get_chunk_hash(int shard) const {
@@ -159,7 +159,7 @@ public:
   friend std::ostream& operator<<(std::ostream& out, const HashInfo& hi);
 };
 
-typedef ceph::shared_ptr<HashInfo> HashInfoRef;
+typedef std::shared_ptr<HashInfo> HashInfoRef;
 
 bool is_hinfo_key_string(const std::string &key);
 const std::string &get_hinfo_key();

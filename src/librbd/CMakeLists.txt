@@ -28,6 +28,7 @@ set(librbd_internal_srcs
   api/Group.cc
   api/Image.cc
   api/Mirror.cc
+  api/Namespace.cc
   api/Snapshot.cc
   cache/ImageWriteback.cc
   cache/ObjectCacherObjectDispatch.cc
@@ -156,10 +157,6 @@ if(HAVE_UDEV)
   target_link_libraries(librbd PRIVATE
     udev)
 endif()
-if(WITH_STATIC_LIBSTDCXX)
-  target_link_libraries(librbd INTERFACE
-    "-static-libstdc++ -static-libgcc")
-endif()
 if(ENABLE_SHARED)
   set_target_properties(librbd PROPERTIES
     OUTPUT_NAME rbd
@@ -173,8 +170,3 @@ if(ENABLE_SHARED)
     endif()
 endif(ENABLE_SHARED)
 install(TARGETS librbd DESTINATION ${CMAKE_INSTALL_LIBDIR})
-
-if(WITH_EMBEDDED)
-  add_library(cephd_rbd_base STATIC librbd.cc ${CMAKE_SOURCE_DIR}/src/common/ContextCompletion.cc)
-  merge_static_libraries(cephd_rbd cephd_rbd_base rbd_internal rbd_types journal)
-endif()

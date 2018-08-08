@@ -40,17 +40,23 @@ protected:
     PyModuleRunner *mod;
 
   public:
-    PyModuleRunnerThread(PyModuleRunner *mod_)
+    explicit PyModuleRunnerThread(PyModuleRunner *mod_)
       : mod(mod_) {}
 
     void *entry() override;
   };
 
+  std::string thread_name;
 
 public:
   int serve();
   void shutdown();
   void log(int level, const std::string &record);
+
+  const char *get_thread_name() const
+  {
+    return thread_name.c_str();
+  }
 
   PyModuleRunner(
       const PyModuleRef &py_module_,
@@ -60,6 +66,10 @@ public:
       clog(clog_),
       thread(this)
   {
+    // Shortened name for use as thread name, because thread names
+    // required to be <16 chars
+    thread_name = py_module->get_name().substr(0, 15);
+
     assert(py_module != nullptr);
   }
 

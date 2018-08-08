@@ -6,6 +6,8 @@ import collections
 from collections import defaultdict
 import json
 
+import rados
+
 from mgr_module import CommandResult
 
 try:
@@ -18,6 +20,13 @@ except ImportError:
         return zip(a, b)
 
 from .. import logger, mgr
+
+
+class SendCommandError(rados.Error):
+    def __init__(self, err, prefix, argdict, errno):
+        self.prefix = prefix
+        self.argdict = argdict
+        super(SendCommandError, self).__init__(err, errno)
 
 
 class CephService(object):
@@ -153,7 +162,7 @@ class CephService(object):
             msg = "send_command '{}' failed. (r={}, outs=\"{}\", kwargs={})".format(prefix, r, outs,
                                                                                     kwargs)
             logger.error(msg)
-            raise ValueError(msg)
+            raise SendCommandError(outs, prefix, argdict, r)
         else:
             try:
                 return json.loads(outb)
@@ -167,9 +176,9 @@ class CephService(object):
         :rtype: list[tuple[int, float]]"""
         data = mgr.get_counter(svc_type, svc_name, path)[path]
         if not data:
-            return [(0, 0)]
+            return [(0, 0.0)]
         elif len(data) == 1:
-            return [(data[0][0], 0)]
+            return [(data[0][0], 0.0)]
         return [(data2[0], differentiate(data1, data2)) for data1, data2 in pairwise(data)]
 
     @classmethod

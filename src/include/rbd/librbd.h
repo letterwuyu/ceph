@@ -206,7 +206,8 @@ enum {
   RBD_IMAGE_OPTION_JOURNAL_POOL = 7,
   RBD_IMAGE_OPTION_FEATURES_SET = 8,
   RBD_IMAGE_OPTION_FEATURES_CLEAR = 9,
-  RBD_IMAGE_OPTION_DATA_POOL = 10
+  RBD_IMAGE_OPTION_DATA_POOL = 10,
+  RBD_IMAGE_OPTION_FLATTEN = 11,
 };
 
 typedef enum {
@@ -485,6 +486,7 @@ CEPH_RBD_API int rbd_snap_create(rbd_image_t image, const char *snapname);
 CEPH_RBD_API int rbd_snap_remove(rbd_image_t image, const char *snapname);
 CEPH_RBD_API int rbd_snap_remove2(rbd_image_t image, const char *snap_name, uint32_t flags,
 				  librbd_progress_fn_t cb, void *cbdata);
+CEPH_RBD_API int rbd_snap_remove_by_id(rbd_image_t image, uint64_t snap_id);
 CEPH_RBD_API int rbd_snap_rollback(rbd_image_t image, const char *snapname);
 CEPH_RBD_API int rbd_snap_rollback_with_progress(rbd_image_t image,
                                                  const char *snapname,
@@ -555,6 +557,10 @@ CEPH_RBD_API int rbd_snap_get_group_namespace(rbd_image_t image,
                                               size_t group_snap_size);
 CEPH_RBD_API int rbd_snap_group_namespace_cleanup(rbd_snap_group_namespace_t *group_snap,
                                                   size_t group_snap_size);
+CEPH_RBD_API int rbd_snap_get_trash_namespace(rbd_image_t image,
+                                              uint64_t snap_id,
+                                              char* original_name,
+                                              size_t max_length);
 
 CEPH_RBD_API int rbd_flatten(rbd_image_t image);
 
@@ -976,6 +982,13 @@ CEPH_RBD_API int rbd_group_snap_list(rados_ioctx_t group_p,
 CEPH_RBD_API int rbd_group_snap_list_cleanup(rbd_group_snap_info_t *snaps,
                                              size_t group_snap_info_size,
                                              size_t num_entries);
+
+CEPH_RBD_API int rbd_namespace_create(rados_ioctx_t io,
+                                      const char *namespace_name);
+CEPH_RBD_API int rbd_namespace_remove(rados_ioctx_t io,
+                                      const char *namespace_name);
+CEPH_RBD_API int rbd_namespace_list(rados_ioctx_t io, char *namespace_names,
+                                    size_t *size);
 
 #ifdef __cplusplus
 }

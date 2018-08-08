@@ -4,30 +4,30 @@
 from __future__ import absolute_import
 
 import math
+from functools import partial
+
 import cherrypy
-import rados
+import six
+
 import rbd
 
-from . import ApiController, AuthRequired, RESTController, Task
+from . import ApiController, RESTController, Task, UpdatePermission
 from .. import mgr
+from ..security import Scope
 from ..services.ceph_service import CephService
 from ..tools import ViewCache
+from ..services.exception import handle_rados_error, handle_rbd_error, \
+    serialize_dashboard_exception
 
 
-# pylint: disable=inconsistent-return-statements
-def _rbd_exception_handler(ex):
-    if isinstance(ex, rbd.OSError):
-        return {'status': 409, 'detail': str(ex), 'errno': ex.errno,
-                'component': 'rbd'}
-    elif isinstance(ex, rados.OSError):
-        return {'status': 409, 'detail': str(ex), 'errno': ex.errno,
-                'component': 'rados'}
-    raise ex
-
-
+# pylint: disable=not-callable
 def RbdTask(name, metadata, wait_for):
-    return Task("rbd/{}".format(name), metadata, wait_for,
-                _rbd_exception_handler)
+    def composed_decorator(func):
+        func = handle_rados_error('pool')(func)
+        func = handle_rbd_error()(func)
+        return Task("rbd/{}".format(name), metadata, wait_for,
+                    partial(serialize_dashboard_exception, include_http_status=True))(func)
+    return composed_decorator
 
 
 def _rbd_call(pool_name, func, *args, **kwargs):
@@ -78,9 +78,12 @@ def _format_features(features):
     >>> _format_features(None) is None
     True
 
-    >>> _format_features('not a list') is None
-    True
+    >>> _format_features('deep-flatten, exclusive-lock')
+    32
     """
+    if isinstance(features, six.string_types):
+        features = features.split(',')
+
     if not isinstance(features, list):
         return None
 
@@ -110,8 +113,7 @@ def _sort_features(features, enable=True):
     features.sort(key=key_func, reverse=not enable)
 
 
-@ApiController('block/image')
-@AuthRequired()
+@ApiController('/block/image', Scope.RBD_IMAGE)
 class Rbd(RESTController):
 
     RESOURCE_ID = "pool_name/image_name"
@@ -254,10 +256,13 @@ class Rbd(RESTController):
             result.append({'status': status, 'value': value, 'pool_name': pool})
         return result
 
+    @handle_rbd_error()
+    @handle_rados_error('pool')
     def list(self, pool_name=None):
-        # pylint: disable=unbalanced-tuple-unpacking
         return self._rbd_list(pool_name)
 
+    @handle_rbd_error()
+    @handle_rados_error('pool')
     def get(self, pool_name, image_name):
         ioctx = mgr.rados.open_ioctx(pool_name)
         try:
@@ -269,6 +274,8 @@ class Rbd(RESTController):
              {'pool_name': '{pool_name}', 'image_name': '{name}'}, 2.0)
     def create(self, name, pool_name, size, obj_size=None, features=None,
                stripe_unit=None, stripe_count=None, data_pool=None):
+
+        size = int(size)
 
         def _create(ioctx):
             rbd_inst = rbd.RBD()
@@ -292,7 +299,7 @@ class Rbd(RESTController):
         rbd_inst = rbd.RBD()
         return _rbd_call(pool_name, rbd_inst.remove, image_name)
 
-    @RbdTask('edit', ['{pool_name}', '{image_name}'], 4.0)
+    @RbdTask('edit', ['{pool_name}', '{image_name}', '{name}'], 4.0)
     def set(self, pool_name, image_name, name=None, size=None, features=None):
         def _edit(ioctx, image):
             rbd_inst = rbd.RBD()
@@ -327,7 +334,7 @@ class Rbd(RESTController):
               'src_image_name': '{image_name}',
               'dest_pool_name': '{dest_pool_name}',
               'dest_image_name': '{dest_image_name}'}, 2.0)
-    @RESTController.resource(['POST'])
+    @RESTController.Resource('POST')
     def copy(self, pool_name, image_name, dest_pool_name, dest_image_name,
              snapshot_name=None, obj_size=None, features=None, stripe_unit=None,
              stripe_count=None, data_pool=None):
@@ -353,7 +360,8 @@ class Rbd(RESTController):
         return _rbd_image_call(pool_name, image_name, _src_copy)
 
     @RbdTask('flatten', ['{pool_name}', '{image_name}'], 2.0)
-    @RESTController.resource(['POST'])
+    @RESTController.Resource('POST')
+    @UpdatePermission
     def flatten(self, pool_name, image_name):
 
         def _flatten(ioctx, image):
@@ -361,14 +369,13 @@ class Rbd(RESTController):
 
         return _rbd_image_call(pool_name, image_name, _flatten)
 
-    @RESTController.collection(['GET'])
+    @RESTController.Collection('GET')
     def default_features(self):
         rbd_default_features = mgr.get('config')['rbd_default_features']
         return _format_bitmask(int(rbd_default_features))
 
 
-@ApiController('block/image/:pool_name/:image_name/snap')
-@AuthRequired()
+@ApiController('/block/image/{pool_name}/{image_name}/snap', Scope.RBD_IMAGE)
 class RbdSnapshot(RESTController):
 
     RESOURCE_ID = "snapshot_name"
@@ -410,7 +417,8 @@ class RbdSnapshot(RESTController):
 
     @RbdTask('snap/rollback',
              ['{pool_name}', '{image_name}', '{snapshot_name}'], 5.0)
-    @RESTController.resource(['POST'])
+    @RESTController.Resource('POST')
+    @UpdatePermission
     def rollback(self, pool_name, image_name, snapshot_name):
         def _rollback(ioctx, img, snapshot_name):
             img.rollback_to_snap(snapshot_name)
@@ -422,7 +430,7 @@ class RbdSnapshot(RESTController):
               'parent_snap_name': '{snapshot_name}',
               'child_pool_name': '{child_pool_name}',
               'child_image_name': '{child_image_name}'}, 2.0)
-    @RESTController.resource(['POST'])
+    @RESTController.Resource('POST')
     def clone(self, pool_name, image_name, snapshot_name, child_pool_name,
               child_image_name, obj_size=None, features=None,
               stripe_unit=None, stripe_count=None, data_pool=None):

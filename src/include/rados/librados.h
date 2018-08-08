@@ -81,6 +81,8 @@ enum {
   LIBRADOS_OP_FLAG_FADVISE_DONTNEED   = 0x20,
   // indicate read/write data will not accessed again (by *this* client)
   LIBRADOS_OP_FLAG_FADVISE_NOCACHE    = 0x40,
+  // optionally support FUA (force unit access) on write requests
+  LIBRADOS_OP_FLAG_FADVISE_FUA        = 0x80,
 };
 
 #if __GNUC__ >= 4
@@ -998,6 +1000,18 @@ CEPH_RADOS_API void rados_ioctx_locator_set_key(rados_ioctx_t io,
  */
 CEPH_RADOS_API void rados_ioctx_set_namespace(rados_ioctx_t io,
                                               const char *nspace);
+
+/**
+ * Get the namespace for objects within the io context
+ *
+ * @param io the io context to query
+ * @param buf pointer to buffer where name will be stored
+ * @param maxlen size of buffer where name will be stored
+ * @returns length of string stored, or -ERANGE if buffer too small
+ */
+CEPH_RADOS_API int rados_ioctx_get_namespace(rados_ioctx_t io, char *buf,
+                                             unsigned maxlen);
+
 /** @} obj_loc */
 
 /**

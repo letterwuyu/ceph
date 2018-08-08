@@ -81,7 +81,7 @@ namespace librbd {
 namespace {
 
 int validate_pool(IoCtx &io_ctx, CephContext *cct) {
-  if (!cct->_conf->get_val<bool>("rbd_validate_pool")) {
+  if (!cct->_conf.get_val<bool>("rbd_validate_pool")) {
     return 0;
   }
 
@@ -311,6 +311,7 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
     {RBD_IMAGE_OPTION_FEATURES_SET, UINT64},
     {RBD_IMAGE_OPTION_FEATURES_CLEAR, UINT64},
     {RBD_IMAGE_OPTION_DATA_POOL, STR},
+    {RBD_IMAGE_OPTION_FLATTEN, UINT64},
   };
 
   std::string image_option_name(int optname) {
@@ -337,6 +338,8 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
       return "features_clear";
     case RBD_IMAGE_OPTION_DATA_POOL:
       return "data_pool";
+    case RBD_IMAGE_OPTION_FLATTEN:
+      return "flatten";
     default:
       return "unknown (" + stringify(optname) + ")";
     }
@@ -529,7 +532,7 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
 
     // old format images are in a tmap
     if (bl.length()) {
-      bufferlist::iterator p = bl.begin();
+      auto p = bl.cbegin();
       bufferlist header;
       map<string,bufferlist> m;
       decode(header, p);
@@ -588,6 +591,9 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
                    << dendl;
         return r;
       }
+
+      // TODO support clone v2 child namespaces
+      ioctx.set_namespace(ictx->md_ctx.get_namespace());
 
       for (auto &id_it : info.second) {
 	ImageCtx *imctx = new ImageCtx("", id_it, NULL, ioctx, false);
@@ -657,6 +663,9 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
                    << dendl;
         return r;
       }
+
+      // TODO support clone v2 child namespaces
+      ioctx.set_namespace(ictx->md_ctx.get_namespace());
 
       for (auto &id_it : info.second) {
         string name;
@@ -741,6 +750,11 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
     int r = validate_pool(io_ctx, cct);
     if (r < 0) {
       return r;
+    }
+
+    if (!io_ctx.get_namespace().empty()) {
+      lderr(cct) << "attempting to add v1 image to namespace" << dendl;
+      return -EINVAL;
     }
 
     ldout(cct, 2) << "adding rbd image to directory..." << dendl;
@@ -842,13 +856,19 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
     }
 
     CephContext *cct = (CephContext *)io_ctx.cct();
+    uint64_t flatten;
+    if (opts.get(RBD_IMAGE_OPTION_FLATTEN, &flatten) == 0) {
+      lderr(cct) << "create does not support 'flatten' image option" << dendl;
+      return -EINVAL;
+    }
+
     ldout(cct, 10) << __func__ << " name=" << image_name << ", "
 		   << "id= " << id << ", "
 		   << "size=" << size << ", opts=" << opts << dendl;
 
     uint64_t format;
     if (opts.get(RBD_IMAGE_OPTION_FORMAT, &format) != 0)
-      format = cct->_conf->get_val<int64_t>("rbd_default_format");
+      format = cct->_conf.get_val<int64_t>("rbd_default_format");
     bool old_format = format == 1;
 
     // make sure it doesn't already exist, in either format
@@ -865,7 +885,7 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
 
     uint64_t order = 0;
     if (opts.get(RBD_IMAGE_OPTION_ORDER, &order) != 0 || order == 0) {
-      order = cct->_conf->get_val<int64_t>("rbd_default_order");
+      order = cct->_conf.get_val<int64_t>("rbd_default_order");
     }
     r = image::CreateRequest<>::validate_order(cct, order);
     if (r < 0) {
@@ -927,6 +947,12 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
     CephContext *cct = (CephContext *)p_ioctx.cct();
     if (p_snap_name == NULL) {
       lderr(cct) << "image to be cloned must be a snapshot" << dendl;
+      return -EINVAL;
+    }
+
+    uint64_t flatten;
+    if (c_opts.get(RBD_IMAGE_OPTION_FLATTEN, &flatten) == 0) {
+      lderr(cct) << "clone does not support 'flatten' image option" << dendl;
       return -EINVAL;
     }
 
@@ -1728,6 +1754,12 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
 	   ImageOptions& opts, ProgressContext &prog_ctx, size_t sparse_size)
   {
     CephContext *cct = (CephContext *)dest_md_ctx.cct();
+    uint64_t flatten;
+    if (opts.get(RBD_IMAGE_OPTION_FLATTEN, &flatten) == 0) {
+      lderr(cct) << "copy does not support 'flatten' image option" << dendl;
+      return -EINVAL;
+    }
+
     ldout(cct, 20) << "copy " << src->name
 		   << (src->snap_name.length() ? "@" + src->snap_name : "")
 		   << " -> " << destname << " opts = " << opts << dendl;

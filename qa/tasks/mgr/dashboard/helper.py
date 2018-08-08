@@ -10,20 +10,12 @@ import time
 
 import requests
 import six
+from teuthology.exceptions import CommandFailedError
 
 from ..mgr_test_case import MgrTestCase
 
 
 log = logging.getLogger(__name__)
-
-
-def authenticate(func):
-    def decorate(self, *args, **kwargs):
-        self._ceph_cmd(['dashboard', 'set-login-credentials', 'admin', 'admin'])
-        self._post('/api/auth', {'username': 'admin', 'password': 'admin'})
-        self.assertStatus(201)
-        return func(self, *args, **kwargs)
-    return decorate
 
 
 class DashboardTestCase(MgrTestCase):
@@ -35,13 +27,86 @@ class DashboardTestCase(MgrTestCase):
 
     _session = None
     _resp = None
+    _loggedin = False
+    _base_uri = None
+
+    AUTO_AUTHENTICATE = True
+
+    AUTH_ROLES = ['administrator']
+
+    @classmethod
+    def create_user(cls, username, password, roles):
+        try:
+            cls._ceph_cmd(['dashboard', 'ac-user-show', username])
+            cls._ceph_cmd(['dashboard', 'ac-user-delete', username])
+        except CommandFailedError as ex:
+            if ex.exitstatus != 2:
+                raise ex
+
+        cls._ceph_cmd(['dashboard', 'ac-user-create', username, password])
+
+        set_roles_args = ['dashboard', 'ac-user-set-roles', username]
+        for idx, role in enumerate(roles):
+            if isinstance(role, str):
+                set_roles_args.append(role)
+            else:
+                assert isinstance(role, dict)
+                rolename = 'test_role_{}'.format(idx)
+                try:
+                    cls._ceph_cmd(['dashboard', 'ac-role-show', rolename])
+                    cls._ceph_cmd(['dashboard', 'ac-role-delete', rolename])
+                except CommandFailedError as ex:
+                    if ex.exitstatus != 2:
+                        raise ex
+                cls._ceph_cmd(['dashboard', 'ac-role-create', rolename])
+                for mod, perms in role.items():
+                    args = ['dashboard', 'ac-role-add-scope-perms', rolename, mod]
+                    args.extend(perms)
+                    cls._ceph_cmd(args)
+                set_roles_args.append(rolename)
+        cls._ceph_cmd(set_roles_args)
+
+    @classmethod
+    def login(cls, username, password):
+        if cls._loggedin:
+            cls.logout()
+        cls._post('/api/auth', {'username': username, 'password': password})
+        cls._loggedin = True
+
+    @classmethod
+    def logout(cls):
+        if cls._loggedin:
+            cls._delete('/api/auth')
+            cls._loggedin = False
+
+    @classmethod
+    def delete_user(cls, username, roles=None):
+        if roles is None:
+            roles = []
+        cls._ceph_cmd(['dashboard', 'ac-user-delete', username])
+        for idx, role in enumerate(roles):
+            if isinstance(role, dict):
+                cls._ceph_cmd(['dashboard', 'ac-role-delete', 'test_role_{}'.format(idx)])
+
+    @classmethod
+    def RunAs(cls, username, password, roles):
+        def wrapper(func):
+            def execute(self, *args, **kwargs):
+                self.create_user(username, password, roles)
+                self.login(username, password)
+                res = func(self, *args, **kwargs)
+                self.logout()
+                self.delete_user(username, roles)
+                return res
+            return execute
+        return wrapper
 
     @classmethod
     def setUpClass(cls):
         super(DashboardTestCase, cls).setUpClass()
         cls._assign_ports("dashboard", "server_port")
         cls._load_module("dashboard")
-        cls.base_uri = cls._get_uri("dashboard").rstrip('/')
+        cls._base_uri = cls._get_uri("dashboard").rstrip('/')
 
         if cls.CEPHFS:
             cls.mds_cluster.clear_firewall()
@@ -72,6 +137,14 @@ class DashboardTestCase(MgrTestCase):
         cls._session = requests.Session()
         cls._resp = None
 
+        cls.create_user('admin', 'admin', cls.AUTH_ROLES)
+        if cls.AUTO_AUTHENTICATE:
+            cls.login('admin', 'admin')
+
+    def setUp(self):
+        if not self._loggedin and self.AUTO_AUTHENTICATE:
+            self.login('admin', 'admin')
+
     @classmethod
     def tearDownClass(cls):
         super(DashboardTestCase, cls).tearDownClass()
@@ -79,16 +152,19 @@ class DashboardTestCase(MgrTestCase):
     # pylint: disable=inconsistent-return-statements
     @classmethod
     def _request(cls, url, method, data=None, params=None):
-        url = "{}{}".format(cls.base_uri, url)
+        url = "{}{}".format(cls._base_uri, url)
         log.info("request %s to %s", method, url)
         if method == 'GET':
-            cls._resp = cls._session.get(url, params=params)
+            cls._resp = cls._session.get(url, params=params, verify=False)
         elif method == 'POST':
-            cls._resp = cls._session.post(url, json=data, params=params)
+            cls._resp = cls._session.post(url, json=data, params=params,
+                                          verify=False)
         elif method == 'DELETE':
-            cls._resp = cls._session.delete(url, json=data, params=params)
+            cls._resp = cls._session.delete(url, json=data, params=params,
+                                            verify=False)
         elif method == 'PUT':
-            cls._resp = cls._session.put(url, json=data, params=params)
+            cls._resp = cls._session.put(url, json=data, params=params,
+                                         verify=False)
         else:
             assert False
         try:
@@ -152,7 +228,10 @@ class DashboardTestCase(MgrTestCase):
     @classmethod
     def _task_request(cls, method, url, data, timeout):
         res = cls._request(url, method, data)
-        cls._assertIn(cls._resp.status_code, [200, 201, 202, 204, 409])
+        cls._assertIn(cls._resp.status_code, [200, 201, 202, 204, 400, 403])
+
+        if cls._resp.status_code == 403:
+            return None
 
         if cls._resp.status_code != 202:
             log.info("task finished immediately")
@@ -163,53 +242,41 @@ class DashboardTestCase(MgrTestCase):
         task_name = res['name']
         task_metadata = res['metadata']
 
-        class Waiter(threading.Thread):
-            def __init__(self, task_name, task_metadata):
-                super(Waiter, self).__init__()
-                self.task_name = task_name
-                self.task_metadata = task_metadata
-                self.ev = threading.Event()
-                self.abort = False
-                self.res_task = None
+        retries = int(timeout)
+        res_task = None
+        while retries > 0 and not res_task:
+            retries -= 1
+            log.info("task (%s, %s) is still executing", task_name,
+                     task_metadata)
+            time.sleep(1)
+            _res = cls._get('/api/task?name={}'.format(task_name))
+            cls._assertEq(cls._resp.status_code, 200)
+            executing_tasks = [task for task in _res['executing_tasks'] if
+                               task['metadata'] == task_metadata]
+            finished_tasks = [task for task in _res['finished_tasks'] if
+                               task['metadata'] == task_metadata]
+            if not executing_tasks and finished_tasks:
+                res_task = finished_tasks[0]
 
-            def run(self):
-                running = True
-                while running and not self.abort:
-                    log.info("task (%s, %s) is still executing", self.task_name,
-                             self.task_metadata)
-                    time.sleep(1)
-                    res = cls._get('/api/task?name={}'.format(self.task_name))
-                    for task in res['finished_tasks']:
-                        if task['metadata'] == self.task_metadata:
-                            # task finished
-                            running = False
-                            self.res_task = task
-                            self.ev.set()
+        if retries <= 0:
+            raise Exception("Waiting for task ({}, {}) to finish timed out. {}"
+                            .format(task_name, task_metadata, _res))
 
-        thread = Waiter(task_name, task_metadata)
-        thread.start()
-        status = thread.ev.wait(timeout)
-        if not status:
-            # timeout expired
-            thread.abort = True
-            thread.join()
-            raise Exception("Waiting for task ({}, {}) to finish timed out"
-                            .format(task_name, task_metadata))
         log.info("task (%s, %s) finished", task_name, task_metadata)
-        if thread.res_task['success']:
+        if res_task['success']:
             if method == 'POST':
                 cls._resp.status_code = 201
             elif method == 'PUT':
                 cls._resp.status_code = 200
             elif method == 'DELETE':
                 cls._resp.status_code = 204
-            return thread.res_task['ret_value']
+            return res_task['ret_value']
         else:
-            if 'status' in thread.res_task['exception']:
-                cls._resp.status_code = thread.res_task['exception']['status']
+            if 'status' in res_task['exception']:
+                cls._resp.status_code = res_task['exception']['status']
             else:
                 cls._resp.status_code = 500
-            return thread.res_task['exception']
+            return res_task['exception']
 
     @classmethod
     def _task_post(cls, url, data=None, timeout=60):
@@ -245,6 +312,9 @@ class DashboardTestCase(MgrTestCase):
         except _ValError as e:
             self.assertEqual(data, str(e))
 
+    def assertSchemaBody(self, schema):
+        self.assertSchema(self.jsonBody(), schema)
+
     def assertBody(self, body):
         self.assertEqual(self._resp.text, body)
 
@@ -253,6 +323,15 @@ class DashboardTestCase(MgrTestCase):
             self.assertIn(self._resp.status_code, status)
         else:
             self.assertEqual(self._resp.status_code, status)
+
+    def assertError(self, code=None, component=None, detail=None):
+        body = self._resp.json()
+        if code:
+            self.assertEqual(body['code'], code)
+        if component:
+            self.assertEqual(body['component'], component)
+        if detail:
+            self.assertEqual(body['detail'], detail)
 
     @classmethod
     def _ceph_cmd(cls, cmd):
@@ -324,7 +403,7 @@ class _ValError(Exception):
 def _validate_json(val, schema, path=[]):
     """
     >>> d = {'a': 1, 'b': 'x', 'c': range(10)}
-    ... ds = JObj({'a': JLeaf(int), 'b': JLeaf(str), 'c': JList(JLeaf(int))})
+    ... ds = JObj({'a': int, 'b': str, 'c': JList(int)})
     ... _validate_json(d, ds)
     True
     """
@@ -339,6 +418,8 @@ def _validate_json(val, schema, path=[]):
             raise _ValError('val not of type {}'.format(schema.typ), path)
         return True
     if isinstance(schema, JList):
+        if not isinstance(val, list):
+            raise _ValError('val="{}" is not a list'.format(val), path)
         return all(_validate_json(e, schema.elem_typ, path + [i]) for i, e in enumerate(val))
     if isinstance(schema, JTuple):
         return all(_validate_json(val[i], typ, path + [i])
@@ -348,6 +429,8 @@ def _validate_json(val, schema, path=[]):
             return True
         elif val is None:
             raise _ValError('val is None', path)
+        if not hasattr(val, 'keys'):
+            raise _ValError('val="{}" is not a dict'.format(val), path)
         missing_keys = set(schema.sub_elems.keys()).difference(set(val.keys()))
         if missing_keys:
             raise _ValError('missing keys: {}'.format(missing_keys), path)
@@ -358,5 +441,7 @@ def _validate_json(val, schema, path=[]):
             _validate_json(val[sub_elem_name], sub_elem, path + [sub_elem_name])
             for sub_elem_name, sub_elem in schema.sub_elems.items()
         )
+    if schema in [str, int, float, bool, six.string_types]:
+        return _validate_json(val, JLeaf(schema), path)
 
     assert False, str(path)

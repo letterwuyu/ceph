@@ -136,7 +136,7 @@ Context *OpenRequest<I>::handle_v2_get_id(int *result) {
   ldout(cct, 10) << __func__ << ": r=" << *result << dendl;
 
   if (*result == 0) {
-    bufferlist::iterator it = m_out_bl.begin();
+    auto it = m_out_bl.cbegin();
     *result = cls_client::get_id_finish(&it, &m_image_ctx->id);
   }
   if (*result < 0) {
@@ -171,7 +171,7 @@ Context *OpenRequest<I>::handle_v2_get_name(int *result) {
   ldout(cct, 10) << __func__ << ": r=" << *result << dendl;
 
   if (*result == 0) {
-    bufferlist::iterator it = m_out_bl.begin();
+    auto it = m_out_bl.cbegin();
     *result = cls_client::dir_get_name_finish(&it, &m_image_ctx->name);
   }
   if (*result < 0 && *result != -ENOENT) {
@@ -212,7 +212,7 @@ Context *OpenRequest<I>::handle_v2_get_name_from_trash(int *result) {
 
   cls::rbd::TrashImageSpec trash_spec;
   if (*result == 0) {
-    bufferlist::iterator it = m_out_bl.begin();
+    auto it = m_out_bl.cbegin();
     *result = cls_client::trash_get_finish(&it, &trash_spec);
     m_image_ctx->name = trash_spec.name;
   }
@@ -261,7 +261,7 @@ Context *OpenRequest<I>::handle_v2_get_initial_metadata(int *result) {
   ldout(cct, 10) << __func__ << ": r=" << *result << dendl;
 
   if (*result == 0) {
-    bufferlist::iterator it = m_out_bl.begin();
+    auto it = m_out_bl.cbegin();
     *result = cls_client::get_initial_metadata_finish(
       &it, &m_image_ctx->object_prefix, &m_image_ctx->order, &m_image_ctx->features);
   }
@@ -304,7 +304,7 @@ Context *OpenRequest<I>::handle_v2_get_stripe_unit_count(int *result) {
   ldout(cct, 10) << __func__ << ": r=" << *result << dendl;
 
   if (*result == 0) {
-    bufferlist::iterator it = m_out_bl.begin();
+    auto it = m_out_bl.cbegin();
     *result = cls_client::get_stripe_unit_count_finish(
       &it, &m_image_ctx->stripe_unit, &m_image_ctx->stripe_count);
   }
@@ -347,7 +347,7 @@ Context *OpenRequest<I>::handle_v2_get_create_timestamp(int *result) {
   ldout(cct, 10) << this << " " << __func__ << ": r=" << *result << dendl;
 
   if (*result == 0) {
-    bufferlist::iterator it = m_out_bl.begin();
+    auto it = m_out_bl.cbegin();
     *result = cls_client::get_create_timestamp_finish(&it,
         &m_image_ctx->create_timestamp);
   }
@@ -387,7 +387,7 @@ Context *OpenRequest<I>::handle_v2_get_data_pool(int *result) {
 
   int64_t data_pool_id = -1;
   if (*result == 0) {
-    bufferlist::iterator it = m_out_bl.begin();
+    auto it = m_out_bl.cbegin();
     *result = cls_client::get_data_pool_finish(&it, &data_pool_id);
   } else if (*result == -EOPNOTSUPP) {
     *result = 0;
@@ -409,6 +409,7 @@ Context *OpenRequest<I>::handle_v2_get_data_pool(int *result) {
       send_close_image(*result);
       return nullptr;
     }
+    m_image_ctx->data_ctx.set_namespace(m_image_ctx->md_ctx.get_namespace());
   }
 
   m_image_ctx->init_layout();
@@ -488,7 +489,11 @@ Context *OpenRequest<I>::handle_register_watch(int *result) {
   CephContext *cct = m_image_ctx->cct;
   ldout(cct, 10) << this << " " << __func__ << ": r=" << *result << dendl;
 
-  if (*result < 0) {
+  if (*result == -EPERM) {
+    ldout(cct, 5) << "user does not have write permission" << dendl;
+    send_close_image(*result);
+    return nullptr;
+  } else if (*result < 0) {
     lderr(cct) << "failed to register watch: " << cpp_strerror(*result)
                << dendl;
     send_close_image(*result);
@@ -515,8 +520,9 @@ Context *OpenRequest<I>::send_set_snap(int *result) {
                                        m_image_ctx->snap_name);
   }
   if (snap_id == CEPH_NOSNAP) {
-    *result = -ENOENT;
-    return m_on_finish;
+    lderr(cct) << "failed to find snapshot " << m_image_ctx->snap_name << dendl;
+    send_close_image(-ENOENT);
+    return nullptr;
   }
 
   using klass = OpenRequest<I>;

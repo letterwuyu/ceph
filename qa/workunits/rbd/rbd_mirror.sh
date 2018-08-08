@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/sh -ex
 #
 # rbd_mirror.sh - test rbd-mirror daemon
 #
@@ -8,6 +8,8 @@
 #
 
 . $(dirname $0)/rbd_mirror_helpers.sh
+
+setup
 
 testlog "TEST: add image and test replay"
 start_mirrors ${CLUSTER1}
@@ -327,16 +329,18 @@ wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${image} 'up+replaying' 'master_
 compare_images ${POOL} ${image}
 
 testlog "TEST: image resync while replayer is stopped"
-admin_daemons ${CLUSTER1} rbd mirror stop ${POOL}/${image}
-wait_for_image_replay_stopped ${CLUSTER1} ${POOL} ${image}
-request_resync_image ${CLUSTER1} ${POOL} ${image} image_id
-admin_daemons ${CLUSTER1} rbd mirror start ${POOL}/${image}
-wait_for_image_present ${CLUSTER1} ${POOL} ${image} 'deleted' ${image_id}
-admin_daemons ${CLUSTER1} rbd mirror start ${POOL}/${image}
-wait_for_image_present ${CLUSTER1} ${POOL} ${image} 'present'
-wait_for_image_replay_started ${CLUSTER1} ${POOL} ${image}
-wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${image} 'up+replaying' 'master_position'
-compare_images ${POOL} ${image}
+if [ -z "${RBD_MIRROR_USE_RBD_MIRROR}" ]; then
+  admin_daemons ${CLUSTER1} rbd mirror stop ${POOL}/${image}
+  wait_for_image_replay_stopped ${CLUSTER1} ${POOL} ${image}
+  request_resync_image ${CLUSTER1} ${POOL} ${image} image_id
+  admin_daemons ${CLUSTER1} rbd mirror start ${POOL}/${image}
+  wait_for_image_present ${CLUSTER1} ${POOL} ${image} 'deleted' ${image_id}
+  admin_daemons ${CLUSTER1} rbd mirror start ${POOL}/${image}
+  wait_for_image_present ${CLUSTER1} ${POOL} ${image} 'present'
+  wait_for_image_replay_started ${CLUSTER1} ${POOL} ${image}
+  wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${image} 'up+replaying' 'master_position'
+  compare_images ${POOL} ${image}
+fi
 
 testlog "TEST: request image resync while daemon is offline"
 stop_mirrors ${CLUSTER1}
@@ -372,21 +376,23 @@ test -n "$(get_mirror_position ${CLUSTER2} ${POOL} ${image})"
 compare_images ${POOL} ${image}
 
 testlog " - disconnected after max_concurrent_object_sets reached"
-admin_daemons ${CLUSTER1} rbd mirror stop ${POOL}/${image}
-wait_for_image_replay_stopped ${CLUSTER1} ${POOL} ${image}
-test -n "$(get_mirror_position ${CLUSTER2} ${POOL} ${image})"
-set_image_meta ${CLUSTER2} ${POOL} ${image} \
-	       conf_rbd_journal_max_concurrent_object_sets 1
-write_image ${CLUSTER2} ${POOL} ${image} 20 16384
-write_image ${CLUSTER2} ${POOL} ${image} 20 16384
-test -z "$(get_mirror_position ${CLUSTER2} ${POOL} ${image})"
-set_image_meta ${CLUSTER2} ${POOL} ${image} \
-	       conf_rbd_journal_max_concurrent_object_sets 0
+if [ -z "${RBD_MIRROR_USE_RBD_MIRROR}" ]; then
+  admin_daemons ${CLUSTER1} rbd mirror stop ${POOL}/${image}
+  wait_for_image_replay_stopped ${CLUSTER1} ${POOL} ${image}
+  test -n "$(get_mirror_position ${CLUSTER2} ${POOL} ${image})"
+  set_image_meta ${CLUSTER2} ${POOL} ${image} \
+	         conf_rbd_journal_max_concurrent_object_sets 1
+  write_image ${CLUSTER2} ${POOL} ${image} 20 16384
+  write_image ${CLUSTER2} ${POOL} ${image} 20 16384
+  test -z "$(get_mirror_position ${CLUSTER2} ${POOL} ${image})"
+  set_image_meta ${CLUSTER2} ${POOL} ${image} \
+	         conf_rbd_journal_max_concurrent_object_sets 0
 
-testlog " - replay is still stopped (disconnected) after restart"
-admin_daemons ${CLUSTER1} rbd mirror start ${POOL}/${image}
-wait_for_image_replay_stopped ${CLUSTER1} ${POOL} ${image}
-wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${image} 'up+error' 'disconnected'
+  testlog " - replay is still stopped (disconnected) after restart"
+  admin_daemons ${CLUSTER1} rbd mirror start ${POOL}/${image}
+  wait_for_image_replay_stopped ${CLUSTER1} ${POOL} ${image}
+  wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${image} 'up+error' 'disconnected'
+fi
 
 testlog " - replay started after resync requested"
 request_resync_image ${CLUSTER1} ${POOL} ${image} image_id
@@ -401,7 +407,7 @@ testlog " - rbd_mirroring_resync_after_disconnect config option"
 set_image_meta ${CLUSTER2} ${POOL} ${image} \
 	       conf_rbd_mirroring_resync_after_disconnect true
 wait_for_replay_complete ${CLUSTER1} ${CLUSTER2} ${POOL} ${image}
-image_id=$(get_image_id ${CLUSTER1} ${pool} ${image})
+image_id=$(get_image_id ${CLUSTER1} ${POOL} ${image})
 disconnect_image ${CLUSTER2} ${POOL} ${image}
 wait_for_image_present ${CLUSTER1} ${POOL} ${image} 'deleted' ${image_id}
 wait_for_image_present ${CLUSTER1} ${POOL} ${image} 'present'
@@ -436,5 +442,3 @@ if [ -z "${RBD_MIRROR_USE_RBD_MIRROR}" ]; then
   CEPH_ARGS='--id admin' ceph --cluster ${CLUSTER1} osd blacklist ls 2>&1 | grep -q "listed 0 entries"
   CEPH_ARGS='--id admin' ceph --cluster ${CLUSTER2} osd blacklist ls 2>&1 | grep -q "listed 0 entries"
 fi
-
-echo OK

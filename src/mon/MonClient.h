@@ -73,7 +73,7 @@ struct MonClientPinger : public Dispatcher {
 
     bufferlist &payload = m->get_payload();
     if (result && payload.length() > 0) {
-      bufferlist::iterator p = payload.begin();
+      auto p = std::cbegin(payload);
       decode(*result, p);
     }
     done = true;
@@ -215,6 +215,16 @@ private:
   void _un_backoff();
   void _add_conns(uint64_t global_id);
   void _send_mon_message(Message *m);
+
+  std::map<entity_addr_t, MonConnection>::iterator _find_pending_con(
+    const ConnectionRef& con) {
+    for (auto i = pending_cons.begin(); i != pending_cons.end(); ++i) {
+      if (i->second.get_con() == con) {
+	return i;
+      }
+    }
+    return pending_cons.end();
+  }
 
 public:
   void set_entity_name(EntityName name) { entity_name = name; }
@@ -399,17 +409,11 @@ public:
     return monmap.fsid;
   }
 
-  entity_addr_t get_mon_addr(unsigned i) const {
+  entity_addrvec_t get_mon_addrs(unsigned i) const {
     Mutex::Locker l(monc_lock);
     if (i < monmap.size())
-      return monmap.get_addr(i);
-    return entity_addr_t();
-  }
-  entity_inst_t get_mon_inst(unsigned i) const {
-    Mutex::Locker l(monc_lock);
-    if (i < monmap.size())
-      return monmap.get_inst(i);
-    return entity_inst_t();
+      return monmap.get_addrs(i);
+    return entity_addrvec_t();
   }
   int get_num_mon() const {
     Mutex::Locker l(monc_lock);
@@ -423,6 +427,7 @@ public:
 
   void set_messenger(Messenger *m) { messenger = m; }
   entity_addr_t get_myaddr() const { return messenger->get_myaddr(); }
+  entity_addrvec_t get_myaddrs() const { return messenger->get_myaddrs(); }
   AuthAuthorizer* build_authorizer(int service_id) const;
 
   void set_want_keys(uint32_t want) {

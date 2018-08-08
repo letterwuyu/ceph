@@ -988,8 +988,7 @@ function test_mon_mds()
   expect_false ceph fs set cephfs max_file_size 123asdf
 
   expect_false ceph fs set cephfs allow_new_snaps
-  expect_false ceph fs set cephfs allow_new_snaps true
-  ceph fs set cephfs allow_new_snaps true --yes-i-really-mean-it
+  ceph fs set cephfs allow_new_snaps true
   ceph fs set cephfs allow_new_snaps 0
   ceph fs set cephfs allow_new_snaps false
   ceph fs set cephfs allow_new_snaps no
@@ -1349,13 +1348,13 @@ function test_mon_osd_create_destroy()
   ceph auth get-key osd.$id3
   ceph config-key exists dm-crypt/osd/$uuid3/luks
 
-  ceph osd purge osd.$id3 --yes-i-really-mean-it
+  ceph osd purge-new osd.$id3 --yes-i-really-mean-it
   expect_false ceph osd find $id2
   expect_false ceph auth get-key osd.$id2
   expect_false ceph auth get-key client.osd-lockbox.$uuid3
   expect_false ceph config-key exists dm-crypt/osd/$uuid3/luks
   ceph osd purge osd.$id3 --yes-i-really-mean-it
-  ceph osd purge osd.$id3 --yes-i-really-mean-it # idempotent
+  ceph osd purge-new osd.$id3 --yes-i-really-mean-it # idempotent
 
   ceph osd purge osd.$id --yes-i-really-mean-it
   ceph osd purge 123456 --yes-i-really-mean-it
@@ -1469,7 +1468,7 @@ function test_mon_osd()
   expect_false ceph osd unset sortbitwise  # cannot be unset
   expect_false ceph osd set bogus
   expect_false ceph osd unset bogus
-  ceph osd require-osd-release mimic
+  ceph osd require-osd-release nautilus
   # can't lower (or use new command for anything but jewel)
   expect_false ceph osd require-osd-release jewel
   # these are no-ops but should succeed.
@@ -1786,8 +1785,8 @@ function test_mon_osd_pool_quota()
   #
   # get quotas
   #
-  ceph osd pool get-quota tmp-quota-pool | grep 'max bytes.*10B'
-  ceph osd pool get-quota tmp-quota-pool | grep 'max objects.*10M objects'
+  ceph osd pool get-quota tmp-quota-pool | grep 'max bytes.*10 B'
+  ceph osd pool get-quota tmp-quota-pool | grep 'max objects.*10 M objects'
   #
   # set valid quotas with unit prefix
   #
@@ -1795,7 +1794,7 @@ function test_mon_osd_pool_quota()
   #
   # get quotas
   #
-  ceph osd pool get-quota tmp-quota-pool | grep 'max bytes.*10Ki'
+  ceph osd pool get-quota tmp-quota-pool | grep 'max bytes.*10 Ki'
   #
   # set valid quotas with unit prefix
   #
@@ -1803,7 +1802,7 @@ function test_mon_osd_pool_quota()
   #
   # get quotas
   #
-  ceph osd pool get-quota tmp-quota-pool | grep 'max bytes.*10Ki'
+  ceph osd pool get-quota tmp-quota-pool | grep 'max bytes.*10 Ki'
   #
   #
   # reset pool quotas
@@ -1950,6 +1949,9 @@ function test_mon_pg()
   expect_false ceph osd pg-temp asdf qwer
   expect_false ceph osd pg-temp 1.0 asdf
   ceph osd pg-temp 1.0 # cleanup pg-temp
+
+  ceph pg repeer 1.0
+  expect_false ceph pg repeer 0.0   # pool 0 shouldn't exist anymore
 
   # don't test ceph osd primary-temp for now
 }

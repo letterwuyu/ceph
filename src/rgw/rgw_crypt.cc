@@ -37,7 +37,7 @@ private:
   CephContext* cct;
   uint8_t key[AES_256_KEYSIZE];
 public:
-  AES_256_CTR(CephContext* cct): cct(cct) {
+  explicit AES_256_CTR(CephContext* cct): cct(cct) {
   }
   ~AES_256_CTR() {
     memset(key, 0, AES_256_KEYSIZE);
@@ -200,7 +200,7 @@ private:
   CephContext* cct;
   uint8_t key[AES_256_KEYSIZE];
 public:
-  AES_256_CBC(CephContext* cct): cct(cct) {
+  explicit AES_256_CBC(CephContext* cct): cct(cct) {
   }
   ~AES_256_CBC() {
     memset(key, 0, AES_256_KEYSIZE);
@@ -536,7 +536,7 @@ int RGWGetObj_BlockDecrypt::read_manifest(bufferlist& manifest_bl) {
   parts_len.clear();
   RGWObjManifest manifest;
   if (manifest_bl.length()) {
-    bufferlist::iterator miter = manifest_bl.begin();
+    auto miter = manifest_bl.cbegin();
     try {
       decode(manifest, miter);
     } catch (buffer::error& err) {

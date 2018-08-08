@@ -3,16 +3,19 @@ from __future__ import absolute_import
 
 import unittest
 
+import cherrypy
 from cherrypy.lib.sessions import RamSession
 from mock import patch
 
+from ..services.exception import handle_rados_error
 from .helper import ControllerTestCase
-from ..controllers import RESTController, ApiController
+from ..controllers import RESTController, ApiController, Controller, \
+                          BaseController, Proxy
 from ..tools import is_valid_ipv6_address, dict_contains_path
 
 
 # pylint: disable=W0613
-@ApiController('foo')
+@Controller('/foo', secure=False)
 class FooResource(RESTController):
     elems = []
 
@@ -37,19 +40,33 @@ class FooResource(RESTController):
         return dict(key=key, newdata=newdata)
 
 
-@ApiController('foo/:key/:method')
+@Controller('/foo/:key/:method', secure=False)
 class FooResourceDetail(RESTController):
     def list(self, key, method):
         return {'detail': (key, [method])}
 
 
-@ApiController('fooargs')
+@ApiController('/rgw/proxy', secure=False)
+class GenerateControllerRoutesController(BaseController):
+    @Proxy()
+    def __call__(self, path, **params):
+        pass
+
+
+@ApiController('/fooargs', secure=False)
 class FooArgs(RESTController):
     def set(self, code, name=None, opt1=None, opt2=None):
         return {'code': code, 'name': name, 'opt1': opt1, 'opt2': opt2}
 
+    @handle_rados_error('foo')
+    def create(self, my_arg_name):
+        return my_arg_name
 
-# pylint: disable=C0102
+    def list(self):
+        raise cherrypy.NotFound()
+
+
+# pylint: disable=blacklisted-name
 class Root(object):
     foo = FooResource()
     fooargs = FooArgs()
@@ -59,7 +76,8 @@ class RESTControllerTest(ControllerTestCase):
 
     @classmethod
     def setup_server(cls):
-        cls.setup_controllers([FooResource, FooResourceDetail, FooArgs])
+        cls.setup_controllers(
+            [FooResource, FooResourceDetail, FooArgs, GenerateControllerRoutesController])
 
     def test_empty(self):
         self._delete("/foo")
@@ -99,13 +117,13 @@ class RESTControllerTest(ControllerTestCase):
         assert 'traceback' in body
 
     def test_args_from_json(self):
-        self._put("/fooargs/hello", {'name': 'world'})
+        self._put("/api/fooargs/hello", {'name': 'world'})
         self.assertJsonBody({'code': 'hello', 'name': 'world', 'opt1': None, 'opt2': None})
 
-        self._put("/fooargs/hello", {'name': 'world', 'opt1': 'opt1'})
+        self._put("/api/fooargs/hello", {'name': 'world', 'opt1': 'opt1'})
         self.assertJsonBody({'code': 'hello', 'name': 'world', 'opt1': 'opt1', 'opt2': None})
 
-        self._put("/fooargs/hello", {'name': 'world', 'opt2': 'opt2'})
+        self._put("/api/fooargs/hello", {'name': 'world', 'opt2': 'opt2'})
         self.assertJsonBody({'code': 'hello', 'name': 'world', 'opt1': None, 'opt2': 'opt2'})
 
     def test_detail_route(self):
@@ -121,19 +139,11 @@ class RESTControllerTest(ControllerTestCase):
         self._post('/foo/1/detail', 'post-data')
         self.assertStatus(404)
 
-    def test_developer_page(self):
-        self.getPage('/foo', headers=[('Accept', 'text/html')])
-        self.assertIn('<p>GET', self.body.decode('utf-8'))
-        self.assertIn('Content-Type: text/html', self.body.decode('utf-8'))
-        self.assertIn('<form action="/api/foo/" method="post">', self.body.decode('utf-8'))
-        self.assertIn('<input type="hidden" name="_method" value="post" />',
-                      self.body.decode('utf-8'))
-
-    def test_developer_exception_page(self):
-        self.getPage('/foo',
-                     headers=[('Accept', 'text/html'), ('Content-Length', '0')],
-                     method='put')
-        self.assertStatus(404)
+    def test_generate_controller_routes(self):
+        # We just need to add this controller in setup_server():
+        # noinspection PyStatementEffect
+        # pylint: disable=pointless-statement
+        GenerateControllerRoutesController
 
 
 class TestFunctions(unittest.TestCase):

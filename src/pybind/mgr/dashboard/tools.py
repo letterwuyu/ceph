@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
-# pylint: disable=W0212
 from __future__ import absolute_import
+
+import sys
+import inspect
+import functools
 
 import collections
 from datetime import datetime, timedelta
+from distutils.util import strtobool
 import fnmatch
 import time
 import threading
@@ -12,12 +16,13 @@ from six.moves import urllib
 import cherrypy
 
 from . import logger
+from .exceptions import ViewCacheNoDataException
 
 
 class RequestLoggingTool(cherrypy.Tool):
     def __init__(self):
         cherrypy.Tool.__init__(self, 'before_handler', self.request_begin,
-                               priority=95)
+                               priority=10)
 
     def _setup(self):
         cherrypy.Tool._setup(self)
@@ -113,8 +118,8 @@ class ViewCache(object):
 
         # pylint: disable=broad-except
         def run(self):
-            t0 = 0
-            t1 = 0
+            t0 = 0.0
+            t1 = 0.0
             try:
                 t0 = time.time()
                 logger.debug("VC: starting execution of %s", self.fn)
@@ -198,7 +203,7 @@ class ViewCache(object):
                     # We have some data, but it doesn't meet freshness requirements
                     return ViewCache.VALUE_STALE, self.value
                 # We have no data, not even stale data
-                return ViewCache.VALUE_NONE, None
+                raise ViewCacheNoDataException()
 
     def __init__(self, timeout=5):
         self.timeout = timeout
@@ -395,7 +400,7 @@ class NotificationQueue(threading.Thread):
         logger.debug("notification queue finished")
 
 
-# pylint: disable=too-many-arguments
+# pylint: disable=too-many-arguments, protected-access
 class TaskManager(object):
     FINISHED_TASK_SIZE = 10
     FINISHED_TASK_TTL = 60.0
@@ -504,6 +509,7 @@ class TaskManager(object):
         } for t in fn_t]
 
 
+# pylint: disable=protected-access
 class TaskExecutor(object):
     def __init__(self):
         self.task = None
@@ -528,6 +534,7 @@ class TaskExecutor(object):
         self.task._complete(ret_value, exception)
 
 
+# pylint: disable=protected-access
 class ThreadedExecutor(TaskExecutor):
     def __init__(self):
         super(ThreadedExecutor, self).__init__()
@@ -573,11 +580,14 @@ class Task(object):
         return hash((self.name, tuple(sorted(self.metadata.items()))))
 
     def __eq__(self, other):
-        return self.name == self.name and self.metadata == self.metadata
+        return self.name == other.name and self.metadata == other.metadata
 
     def __str__(self):
         return "Task(ns={}, md={})" \
                .format(self.name, self.metadata)
+
+    def __repr__(self):
+        return str(self)
 
     def _run(self):
         with self.lock:
@@ -593,7 +603,7 @@ class Task(object):
         if exception and self.ex_handler:
             # pylint: disable=broad-except
             try:
-                ret_value = self.ex_handler(exception)
+                ret_value = self.ex_handler(exception, task=self)
             except Exception as ex:
                 exception = ex
         with self.lock:
@@ -707,3 +717,50 @@ def dict_contains_path(dct, keys):
             return dict_contains_path(dct, keys)
         return False
     return True
+
+
+if sys.version_info > (3, 0):
+    wraps = functools.wraps
+    _getargspec = inspect.getfullargspec
+else:
+    def wraps(func):
+        def decorator(wrapper):
+            new_wrapper = functools.wraps(func)(wrapper)
+            new_wrapper.__wrapped__ = func  # set __wrapped__ even for Python 2
+            return new_wrapper
+        return decorator
+
+    _getargspec = inspect.getargspec
+
+
+def getargspec(func):
+    try:
+        while True:
+            func = func.__wrapped__
+    except AttributeError:
+        pass
+    return _getargspec(func)
+
+
+def str_to_bool(val):
+    """
+    Convert a string representation of truth to True or False.
+
+    >>> str_to_bool('true') and str_to_bool('yes') and str_to_bool('1') and str_to_bool(True)
+    True
+
+    >>> str_to_bool('false') and str_to_bool('no') and str_to_bool('0') and str_to_bool(False)
+    False
+
+    >>> str_to_bool('xyz')
+    Traceback (most recent call last):
+        ...
+    ValueError: invalid truth value 'xyz'
+
+    :param val: The value to convert.
+    :type val: str|bool
+    :rtype: bool
+    """
+    if isinstance(val, bool):
+        return val
+    return bool(strtobool(val))

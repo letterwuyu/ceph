@@ -21,7 +21,8 @@ from rbd import (RBD, Group, Image, ImageNotFound, InvalidArgument, ImageExists,
                  RBD_MIRROR_MODE_DISABLED, RBD_MIRROR_MODE_IMAGE,
                  RBD_MIRROR_MODE_POOL, RBD_MIRROR_IMAGE_ENABLED,
                  RBD_MIRROR_IMAGE_DISABLED, MIRROR_IMAGE_STATUS_STATE_UNKNOWN,
-                 RBD_LOCK_MODE_EXCLUSIVE, RBD_OPERATION_FEATURE_GROUP)
+                 RBD_LOCK_MODE_EXCLUSIVE, RBD_OPERATION_FEATURE_GROUP,
+                 RBD_SNAP_NAMESPACE_TYPE_TRASH)
 
 rados = None
 ioctx = None
@@ -729,6 +730,7 @@ class TestImage(object):
         self.image.set_snap('snap1')
         read = self.image.read(0, 256)
         eq(read, b'\0' * 256)
+        assert_raises(ReadOnlyImage, self.image.write, data, 0)
         self.image.remove_snap('snap1')
 
     def test_set_no_snap(self):
@@ -743,6 +745,7 @@ class TestImage(object):
         self.image.set_snap('snap1')
         read = self.image.read(0, 256)
         eq(read, b'\0' * 256)
+        assert_raises(ReadOnlyImage, self.image.write, data, 0)
         self.image.set_snap(None)
         read = self.image.read(0, 256)
         eq(read, data)
@@ -761,6 +764,7 @@ class TestImage(object):
         self.image.set_snap_by_id(snaps[0]['id'])
         read = self.image.read(0, 256)
         eq(read, b'\0' * 256)
+        assert_raises(ReadOnlyImage, self.image.write, data, 0)
         self.image.set_snap_by_id(None)
         read = self.image.read(0, 256)
         eq(read, data)
@@ -777,6 +781,7 @@ class TestImage(object):
         self.image.set_snap('snap1')
         read = self.image.read(0, 256)
         eq(read, b'\0' * 256)
+        assert_raises(ReadOnlyImage, self.image.write, data, 0)
         self.image.remove_snap('snap1')
 
     def test_many_snaps(self):
@@ -1369,6 +1374,23 @@ class TestClone(object):
         self.clone.unprotect_snap('snap2')
         self.clone.remove_snap('snap2')
 
+    def test_trash_snapshot(self):
+        self.image.create_snap('snap2')
+        global features
+        clone_name = get_temp_image_name()
+        rados.conf_set("rbd_default_clone_format", "2")
+        self.rbd.clone(ioctx, image_name, 'snap2', ioctx, clone_name, features)
+        rados.conf_set("rbd_default_clone_format", "auto")
+
+        self.image.remove_snap('snap2')
+
+        snaps = [s for s in self.image.list_snaps() if s['name'] != 'snap1']
+        eq([RBD_SNAP_NAMESPACE_TYPE_TRASH], [s['namespace'] for s in snaps])
+        eq([{'original_name' : 'snap2'}], [s['trash'] for s in snaps])
+
+        self.rbd.remove(ioctx, clone_name)
+        eq([], [s for s in self.image.list_snaps() if s['name'] != 'snap1'])
+
 class TestExclusiveLock(object):
 
     @require_features([RBD_FEATURE_EXCLUSIVE_LOCK])
@@ -1842,10 +1864,8 @@ class TestGroups(object):
         eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
 
         for snap in self.image.list_snaps():
-            eq(rbd.RBD_SNAP_NAMESPACE_TYPE_GROUP,
-               self.image.snap_get_namespace_type(snap['id']))
-
-            info = self.image.snap_get_group_namespace(snap['id'])
+            eq(rbd.RBD_SNAP_NAMESPACE_TYPE_GROUP, snap['namespace'])
+            info = snap['group']
             eq(group_name, info['group_name'])
             eq(snap_name, info['group_snap_name'])
 

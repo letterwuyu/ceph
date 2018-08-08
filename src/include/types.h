@@ -331,7 +331,7 @@ struct client_t {
     using ceph::encode;
     encode(v, bl);
   }
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
     using ceph::decode;
     decode(v, bl);
   }
@@ -363,11 +363,11 @@ namespace {
     char buffer[32];
 
     if (index == 0) {
-      (void) snprintf(buffer, sizeof(buffer), "%" PRId64 "%s", n, u);
+      (void) snprintf(buffer, sizeof(buffer), "%" PRId64 " %s", n, u);
     } else if ((v % mult) == 0) {
       // If this is an even multiple of the base, always display
       // without any decimal fraction.
-      (void) snprintf(buffer, sizeof(buffer), "%" PRId64 "%s", n, u);
+      (void) snprintf(buffer, sizeof(buffer), "%" PRId64 " %s", n, u);
     } else {
       // We want to choose a precision that reflects the best choice
       // for fitting in 5 characters.  This can get rather tricky when
@@ -378,7 +378,7 @@ namespace {
       // easier just to try each combination in turn.
       int i;
       for (i = 2; i >= 0; i--) {
-        if (snprintf(buffer, sizeof(buffer), "%.*f%s", i,
+        if (snprintf(buffer, sizeof(buffer), "%.*f %s", i,
           static_cast<double>(v) / mult, u) <= 7)
           break;
       }
@@ -477,7 +477,7 @@ struct shard_id_t {
     using ceph::encode;
     encode(id, bl);
   }
-  void decode(bufferlist::iterator &bl) {
+  void decode(bufferlist::const_iterator &bl) {
     using ceph::decode;
     decode(id, bl);
   }
@@ -515,7 +515,7 @@ struct errorcode32_t {
     __s32 newcode = hostos_to_ceph_errno(code);
     encode(newcode, bl);
   }
-  void decode(bufferlist::iterator &bl) {
+  void decode(bufferlist::const_iterator &bl) {
     using ceph::decode;
     decode(code, bl);
     code = ceph_to_hostos_errno(code);

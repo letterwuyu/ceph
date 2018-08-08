@@ -43,6 +43,7 @@ class LocalLock;
 
 #include "CInode.h"
 #include "SimpleLock.h"
+#include "MDSContext.h"
 #include "Mutation.h"
 
 class Locker {
@@ -89,9 +90,9 @@ public:
   void drop_non_rdlocks(MutationImpl *mut, set<CInode*> *pneed_issue=0);
   void drop_rdlocks_for_early_reply(MutationImpl *mut);
 
-  void eval_gather(SimpleLock *lock, bool first=false, bool *need_issue=0, list<MDSInternalContextBase*> *pfinishers=0);
+  void eval_gather(SimpleLock *lock, bool first=false, bool *need_issue=0, MDSInternalContextBase::vec *pfinishers=0);
   void eval(SimpleLock *lock, bool *need_issue);
-  void eval_any(SimpleLock *lock, bool *need_issue, list<MDSInternalContextBase*> *pfinishers=0, bool first=false) {
+  void eval_any(SimpleLock *lock, bool *need_issue, MDSInternalContextBase::vec *pfinishers=0, bool first=false) {
     if (!lock->is_stable())
       eval_gather(lock, first, need_issue, pfinishers);
     else if (lock->get_parent()->is_auth())
@@ -256,7 +257,7 @@ public:
 protected:
   void handle_inode_file_caps(class MInodeFileCaps *m);
 
-  void file_update_finish(CInode *in, MutationRef& mut, bool share_max, bool issue_client_cap,
+  void file_update_finish(CInode *in, MutationRef& mut, unsigned flags,
 			  client_t client, MClientCaps *ack);
 private:
   uint64_t calc_new_max_size(CInode::mempool_inode *pi, uint64_t size);

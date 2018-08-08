@@ -76,7 +76,7 @@ public:
     return modules_out;
   }
 
-  PyModuleRegistry(LogChannelRef clog_)
+  explicit PyModuleRegistry(LogChannelRef clog_)
     : clog(clog_)
   {}
 
@@ -96,7 +96,7 @@ public:
                 const std::map<std::string, std::string> &kv_store,
                 MonClient &mc, LogChannelRef clog_, Objecter &objecter_,
                 Client &client_, Finisher &f);
-  void standby_start();
+  void standby_start(MonClient &mc);
 
   bool is_standby_running() const
   {
@@ -140,6 +140,7 @@ public:
   int handle_command(
     std::string const &module_name,
     const cmdmap_t &cmdmap,
+    const bufferlist &inbuf,
     std::stringstream *ds,
     std::stringstream *ss);
 

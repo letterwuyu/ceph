@@ -7,7 +7,7 @@ the single-call helper
 import os
 import logging
 import json
-from ceph_volume import process, conf
+from ceph_volume import process, conf, __release__
 from ceph_volume.util import system, constants
 
 logger = logging.getLogger(__name__)
@@ -64,8 +64,11 @@ def create_id(fsid, json_secrets, osd_id=None):
         '-i', '-',
         'osd', 'new', fsid
     ]
-    if check_id(osd_id):
-        cmd.append(osd_id)
+    if osd_id is not None:
+        if osd_id_available(osd_id):
+            cmd.append(osd_id)
+        else:
+            raise RuntimeError("The osd ID {} is already in use or does not exist.".format(osd_id))
     stdout, stderr, returncode = process.call(
         cmd,
         stdin=json_secrets,
@@ -76,10 +79,10 @@ def create_id(fsid, json_secrets, osd_id=None):
     return ' '.join(stdout).strip()
 
 
-def check_id(osd_id):
+def osd_id_available(osd_id):
     """
-    Checks to see if an osd ID exists or not. Returns True
-    if it does exist, False if it doesn't.
+    Checks to see if an osd ID exists and if it's available for
+    reuse. Returns True if it is, False if it isn't.
 
     :param osd_id: The osd ID to check
     """
@@ -103,7 +106,10 @@ def check_id(osd_id):
 
     output = json.loads(''.join(stdout).strip())
     osds = output['nodes']
-    return any([str(osd['id']) == str(osd_id) for osd in osds])
+    osd = [osd for osd in osds if str(osd['id']) == str(osd_id)]
+    if osd and osd[0].get('status') == "destroyed":
+        return True
+    return False
 
 
 def mount_tmpfs(path):
@@ -113,6 +119,9 @@ def mount_tmpfs(path):
         'tmpfs', 'tmpfs',
         path
     ])
+
+    # Restore SELinux context
+    system.set_context(path)
 
 
 def create_osd_path(osd_id, tmpfs=False):
@@ -213,6 +222,9 @@ def mount_osd(device, osd_id, **kw):
     command.append(destination)
     process.run(command)
 
+    # Restore SELinux context
+    system.set_context(destination)
+
 
 def _link_device(device, device_type, osd_id):
     """
@@ -291,7 +303,6 @@ def osd_mkfs_bluestore(osd_id, fsid, keyring=None, wal=False, db=False):
     base_command = [
         'ceph-osd',
         '--cluster', conf.cluster,
-        # undocumented flag, sets the `type` file to contain 'bluestore'
         '--osd-objectstore', 'bluestore',
         '--mkfs',
         '-i', osd_id,
@@ -322,7 +333,9 @@ def osd_mkfs_bluestore(osd_id, fsid, keyring=None, wal=False, db=False):
 
     command = base_command + supplementary_command
 
-    process.call(command, stdin=keyring, show_command=True)
+    _, _, returncode = process.call(command, stdin=keyring, show_command=True)
+    if returncode != 0:
+        raise RuntimeError('Command failed with exit code %s: %s' % (returncode, ' '.join(command)))
 
 
 def osd_mkfs_filestore(osd_id, fsid, keyring):
@@ -348,16 +361,26 @@ def osd_mkfs_filestore(osd_id, fsid, keyring):
     command = [
         'ceph-osd',
         '--cluster', conf.cluster,
-        # undocumented flag, sets the `type` file to contain 'filestore'
         '--osd-objectstore', 'filestore',
         '--mkfs',
         '-i', osd_id,
         '--monmap', monmap,
-        '--keyfile', '-', # goes through stdin
+    ]
+
+    if __release__ != 'luminous':
+        # goes through stdin
+        command.extend(['--keyfile', '-'])
+
+    command.extend([
         '--osd-data', path,
         '--osd-journal', journal,
         '--osd-uuid', fsid,
         '--setuser', 'ceph',
         '--setgroup', 'ceph'
-    ]
-    process.call(command, stdin=keyring, terminal_verbose=True, show_command=True)
+    ])
+
+    _, _, returncode = process.call(
+        command, stdin=keyring, terminal_verbose=True, show_command=True
+    )
+    if returncode != 0:
+        raise RuntimeError('Command failed with exit code %s: %s' % (returncode, ' '.join(command)))

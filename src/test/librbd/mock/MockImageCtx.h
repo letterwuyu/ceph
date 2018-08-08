@@ -165,6 +165,7 @@ struct MockImageCtx {
 					     cls::rbd::SnapshotNamespace *out_snap_namespace));
   MOCK_CONST_METHOD2(get_parent_spec, int(librados::snap_t in_snap_id,
                                           ParentSpec *pspec));
+  MOCK_CONST_METHOD1(get_parent_info, const ParentInfo*(librados::snap_t));
   MOCK_CONST_METHOD2(get_parent_overlap, int(librados::snap_t in_snap_id,
                                              uint64_t *overlap));
   MOCK_CONST_METHOD2(prune_parent_extents, uint64_t(vector<pair<uint64_t,uint64_t> >& ,
@@ -212,6 +213,8 @@ struct MockImageCtx {
 
   MOCK_CONST_METHOD0(get_stripe_count, uint64_t());
   MOCK_CONST_METHOD0(get_stripe_period, uint64_t());
+
+  MOCK_CONST_METHOD0(is_writeback_cache_enabled, bool());
 
   ImageCtx *image_ctx;
   CephContext *cct;

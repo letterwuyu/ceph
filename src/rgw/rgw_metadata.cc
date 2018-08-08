@@ -52,7 +52,7 @@ void RGWMetadataLogData::encode(bufferlist& bl) const {
   ENCODE_FINISH(bl);
 }
 
-void RGWMetadataLogData::decode(bufferlist::iterator& bl) {
+void RGWMetadataLogData::decode(bufferlist::const_iterator& bl) {
    DECODE_START(1, bl);
    decode(read_version, bl);
    decode(write_version, bl);
@@ -319,7 +319,7 @@ public:
     delete data;
   }
 
-  virtual string get_marker(void *handle) {
+  virtual string get_marker(void *handle) override {
     iter_data *data = static_cast<iter_data *>(handle);
 
     if (data->iter != data->sections.end()) {
@@ -375,7 +375,7 @@ int read_history(RGWRados *store, RGWMetadataLogHistory *state,
     return -ENOENT;
   }
   try {
-    auto p = bl.begin();
+    auto p = bl.cbegin();
     state->decode(p);
   } catch (buffer::error& e) {
     ldout(store->ctx(), 1) << "failed to decode the mdlog history: "
@@ -953,7 +953,7 @@ void RGWMetadataManager::dump_log_entry(cls_log_entry& entry, Formatter *f)
 
   try {
     RGWMetadataLogData log_data;
-    bufferlist::iterator iter = entry.data.begin();
+    auto iter = entry.data.cbegin();
     decode(log_data, iter);
 
     encode_json("data", log_data, f);

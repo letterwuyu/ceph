@@ -114,6 +114,7 @@
  *  MGR       - command goes to ceph-mgr (for luminous+)
  *  POLL      - command is intended to be called periodically by the
  *              client (see iostat)
+ *  HIDDEN    - command is hidden (no reported by help etc)
  *
  * A command should always be first considered DEPRECATED before being
  * considered OBSOLETE, giving due consideration to users and conforming
@@ -122,6 +123,8 @@
 
 COMMAND("pg map name=pgid,type=CephPgid", "show mapping of pg to osds", \
 	"pg", "r", "cli,rest")
+COMMAND("pg repeer name=pgid,type=CephPgid", "force a PG to repeer",
+	"osd", "rw", "cli,rest")
 COMMAND("osd last-stat-seq name=id,type=CephOsdName", \
 	"get the last pg stats sequence number reported for this osd", \
 	"osd", "r", "cli,rest")
@@ -315,8 +318,8 @@ COMMAND_WITH_FLAG("mds set_max_mds " \
 	"name=maxmds,type=CephInt,range=0", \
 	"set max MDS index", "mds", "rw", "cli,rest", FLAG(OBSOLETE))
 COMMAND_WITH_FLAG("mds set " \
-	"name=var,type=CephChoices,strings=max_mds|max_file_size"
-	"|allow_new_snaps|inline_data|allow_multimds|allow_dirfrags " \
+	"name=var,type=CephChoices,strings=max_mds|max_file_size|inline_data|"
+	"allow_new_snaps|allow_multimds|allow_multimds_snaps|allow_dirfrags " \
 	"name=val,type=CephString "					\
 	"name=confirm,type=CephString,req=false",			\
 	"set mds parameter <var> to <val>", "mds", "rw", "cli,rest", FLAG(OBSOLETE))
@@ -389,7 +392,7 @@ COMMAND("fs set " \
 	"name=var,type=CephChoices,strings=max_mds|max_file_size"
         "|allow_new_snaps|inline_data|cluster_down|allow_dirfrags|balancer" \
         "|standby_count_wanted|session_timeout|session_autoclose" \
-        "|down|joinable " \
+        "|down|joinable|min_compat_client " \
 	"name=val,type=CephString "					\
 	"name=confirm,type=CephString,req=false",			\
 	"set fs parameter <var> to <val>", "mds", "rw", "cli,rest")
@@ -443,6 +446,11 @@ COMMAND("mon feature set " \
         "name=sure,type=CephChoices,strings=--yes-i-really-mean-it,req=false", \
         "set provided feature on mon map", \
         "mon", "rw", "cli,rest")
+COMMAND("mon set-rank " \
+	"name=name,type=CephString " \
+	"name=rank,type=CephInt",
+	"set the rank for the specified mon",
+	"mon", "rw", "cli,rest")
 
 /*
  * OSD commands
@@ -746,7 +754,7 @@ COMMAND("osd unset " \
 	"name=key,type=CephChoices,strings=full|pause|noup|nodown|noout|noin|nobackfill|norebalance|norecover|noscrub|nodeep-scrub|notieragent|nosnaptrim", \
 	"unset <key>", "osd", "rw", "cli,rest")
 COMMAND("osd require-osd-release "\
-	"name=release,type=CephChoices,strings=luminous|mimic " \
+	"name=release,type=CephChoices,strings=luminous|mimic|nautilus " \
 	"name=sure,type=CephChoices,strings=--yes-i-really-mean-it,req=false", \
 	"set the minimum allowed OSD release to participate in the cluster",
 	"osd", "rw", "cli,rest")
@@ -767,11 +775,12 @@ COMMAND("osd in " \
 	"set osd(s) <id> [<id>...] in, "
         "can use <any|all> to automatically set all previously out osds in", \
         "osd", "rw", "cli,rest")
-COMMAND("osd rm " \
+COMMAND_WITH_FLAG("osd rm " \
 	"name=ids,type=CephString,n=N", \
 	"remove osd(s) <id> [<id>...], "
         "or use <any|all> to remove all osds", \
-        "osd", "rw", "cli,rest")
+	"osd", "rw", "cli,rest",
+	FLAG(DEPRECATED))
 COMMAND("osd add-noup " \
         "name=ids,type=CephString,n=N", \
         "mark osd(s) <id> [<id>...] as noup, " \
@@ -862,19 +871,25 @@ COMMAND("osd primary-affinity " \
 	"type=CephFloat,name=weight,range=0.0|1.0", \
 	"adjust osd primary-affinity from 0.0 <= <weight> <= 1.0", \
 	"osd", "rw", "cli,rest")
-COMMAND("osd destroy " \
+COMMAND_WITH_FLAG("osd destroy-actual "	    \
         "name=id,type=CephOsdName " \
         "name=sure,type=CephChoices,strings=--yes-i-really-mean-it,req=false", \
         "mark osd as being destroyed. Keeps the ID intact (allowing reuse), " \
         "but removes cephx keys, config-key data and lockbox keys, "\
         "rendering data permanently unreadable.", \
+		  "osd", "rw", "cli,rest", FLAG(HIDDEN))
+COMMAND("osd purge-new " \
+        "name=id,type=CephOsdName " \
+        "name=sure,type=CephChoices,strings=--yes-i-really-mean-it,req=false", \
+        "purge all traces of an OSD that was partially created but never " \
+	"started", \
         "osd", "rw", "cli,rest")
-COMMAND("osd purge " \
+COMMAND_WITH_FLAG("osd purge-actual " \
         "name=id,type=CephOsdName " \
         "name=sure,type=CephChoices,strings=--yes-i-really-mean-it,req=false", \
         "purge all osd data from the monitors. Combines `osd destroy`, " \
         "`osd rm`, and `osd crush rm`.", \
-        "osd", "rw", "cli,rest")
+		  "osd", "rw", "cli,rest", FLAG(HIDDEN))
 COMMAND("osd lost " \
 	"name=id,type=CephOsdName " \
 	"name=sure,type=CephChoices,strings=--yes-i-really-mean-it,req=false", \

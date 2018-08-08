@@ -1,19 +1,18 @@
-import { async, ComponentFixture, TestBed } from '@angular/core/testing';
+import { NO_ERRORS_SCHEMA } from '@angular/core';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 
-import { AppModule } from '../../../app.module';
+import { configureTestBed } from '../../../../testing/unit-test-helper';
 import { SparklineComponent } from './sparkline.component';
 
 describe('SparklineComponent', () => {
   let component: SparklineComponent;
   let fixture: ComponentFixture<SparklineComponent>;
 
-  beforeEach(
-    async(() => {
-      TestBed.configureTestingModule({
-        imports: [AppModule]
-      }).compileComponents();
-    })
-  );
+  configureTestBed({
+    declarations: [SparklineComponent],
+    schemas: [NO_ERRORS_SCHEMA],
+    imports: []
+  });
 
   beforeEach(() => {
     fixture = TestBed.createComponent(SparklineComponent);

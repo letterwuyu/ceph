@@ -11,6 +11,7 @@
 #include "librbd/ExclusiveLock.h"
 #include "librbd/MirroringWatcher.h"
 #include "librbd/image/DetachChildRequest.h"
+#include "librbd/journal/DisabledPolicy.h"
 #include "librbd/journal/RemoveRequest.h"
 #include "librbd/mirror/DisableRequest.h"
 #include "librbd/operation/SnapshotRemoveRequest.h"
@@ -125,6 +126,13 @@ void RemoveRequest<I>::check_exclusive_lock() {
 template<typename I>
 void RemoveRequest<I>::acquire_exclusive_lock() {
   ldout(m_cct, 20) << dendl;
+
+  // do not attempt to open the journal when removing the image in case
+  // it's corrupt
+  if (m_image_ctx->test_features(RBD_FEATURE_JOURNALING)) {
+    RWLock::WLocker snap_locker(m_image_ctx->snap_lock);
+    m_image_ctx->set_journal_policy(new journal::DisabledPolicy());
+  }
 
   using klass = RemoveRequest<I>;
   if (m_force) {
@@ -346,7 +354,7 @@ void RemoveRequest<I>::handle_check_group(int r) {
 
   cls::rbd::GroupSpec s;
   if (r == 0) {
-    bufferlist::iterator it = m_out_bl.begin();
+    auto it = m_out_bl.cbegin();
     r = librbd::cls_client::image_group_get_finish(&it, &s);
   }
   if (r < 0 && r != -EOPNOTSUPP) {
@@ -760,7 +768,7 @@ void RemoveRequest<I>::handle_dir_get_image_id(int r) {
   }
 
   if (r == 0) {
-    bufferlist::iterator iter = m_out_bl.begin();
+    auto iter = m_out_bl.cbegin();
     r = librbd::cls_client::dir_get_id_finish(&iter, &m_image_id);
     if (r < 0) {
       finish(r);
@@ -799,7 +807,7 @@ void RemoveRequest<I>::handle_dir_get_image_name(int r) {
   }
 
   if (r == 0) {
-    bufferlist::iterator iter = m_out_bl.begin();
+    auto iter = m_out_bl.cbegin();
     r = librbd::cls_client::dir_get_name_finish(&iter, &m_image_name);
     if (r < 0) {
       finish(r);

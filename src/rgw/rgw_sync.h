@@ -43,7 +43,7 @@ struct rgw_mdlog_entry {
     name = le.name;
     timestamp = le.timestamp.to_real_time();
     try {
-      bufferlist::iterator iter = le.data.begin();
+      auto iter = le.data.cbegin();
       decode(log_data, iter);
     } catch (buffer::error& err) {
       return false;
@@ -96,7 +96,7 @@ struct rgw_sync_error_info {
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
     DECODE_START(1, bl);
     decode(source_zone, bl);
     decode(error_code, bl);
@@ -116,7 +116,7 @@ class RGWSyncBackoff {
 
   void update_wait_time();
 public:
-  RGWSyncBackoff(int _max_secs = DEFAULT_BACKOFF_MAX) : cur_wait(0), max_secs(_max_secs) {}
+  explicit RGWSyncBackoff(int _max_secs = DEFAULT_BACKOFF_MAX) : cur_wait(0), max_secs(_max_secs) {}
 
   void backoff_sleep();
   void reset() {
@@ -302,7 +302,7 @@ class RGWLastCallerWinsCR : public RGWOrderCallCR
   RGWCoroutine *cr{nullptr};
 
 public:
-  RGWLastCallerWinsCR(CephContext *cct) : RGWOrderCallCR(cct) {}
+  explicit RGWLastCallerWinsCR(CephContext *cct) : RGWOrderCallCR(cct) {}
   ~RGWLastCallerWinsCR() {
     if (cr) {
       cr->put();
@@ -311,7 +311,7 @@ public:
 
   int operate() override;
 
-  void call_cr(RGWCoroutine *_cr) {
+  void call_cr(RGWCoroutine *_cr) override {
     if (cr) {
       cr->put();
     }

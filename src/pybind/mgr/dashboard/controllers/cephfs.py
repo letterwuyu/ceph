@@ -5,15 +5,16 @@ from collections import defaultdict
 
 import cherrypy
 
-from . import ApiController, AuthRequired, BaseController
+from . import ApiController, RESTController
 from .. import mgr
+from ..exceptions import DashboardException
+from ..security import Scope
 from ..services.ceph_service import CephService
 from ..tools import ViewCache
 
 
-@ApiController('cephfs')
-@AuthRequired()
-class CephFS(BaseController):
+@ApiController('/cephfs', Scope.CEPHFS)
+class CephFS(RESTController):
     def __init__(self):
         super(CephFS, self).__init__()
 
@@ -21,22 +22,22 @@ class CephFS(BaseController):
         # dict is FSCID
         self.cephfs_clients = {}
 
-    @cherrypy.expose
-    @cherrypy.tools.json_out()
+    def list(self):
+        fsmap = mgr.get("fs_map")
+        return fsmap['filesystems']
+
+    def get(self, fs_id):
+        fs_id = self.fs_id_to_int(fs_id)
+
+        return self.fs_status(fs_id)
+
+    @RESTController.Resource('GET')
     def clients(self, fs_id):
         fs_id = self.fs_id_to_int(fs_id)
 
         return self._clients(fs_id)
 
-    @cherrypy.expose
-    @cherrypy.tools.json_out()
-    def data(self, fs_id):
-        fs_id = self.fs_id_to_int(fs_id)
-
-        return self.fs_status(fs_id)
-
-    @cherrypy.expose
-    @cherrypy.tools.json_out()
+    @RESTController.Resource('GET')
     def mds_counters(self, fs_id):
         """
         Result format: map of daemon name to map of counter to list of datapoints
@@ -80,7 +81,9 @@ class CephFS(BaseController):
         try:
             return int(fs_id)
         except ValueError:
-            raise cherrypy.HTTPError(400, "Invalid cephfs id {}".format(fs_id))
+            raise DashboardException(code='invalid_cephfs_id',
+                                     msg="Invalid cephfs ID {}".format(fs_id),
+                                     component='cephfs')
 
     def _get_mds_names(self, filesystem_id=None):
         names = []
@@ -284,8 +287,6 @@ class CephFSClients(object):
         self._module = module_inst
         self.fscid = fscid
 
-    # pylint: disable=unused-variable
     @ViewCache()
     def get(self):
-        # TODO handle nonzero returns, e.g. when rank isn't active
         return CephService.send_command('mds', 'session ls', srv_spec='{0}:0'.format(self.fscid))

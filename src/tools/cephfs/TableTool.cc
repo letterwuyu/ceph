@@ -114,7 +114,7 @@ public:
     bufferlist table_bl;
     int read_r = io->read(object_name, table_bl, 0, 0);
     if (read_r >= 0) {
-      bufferlist::iterator q = table_bl.begin();
+      auto q = table_bl.cbegin();
       try {
         if (mds_table) {
           version_t version;
@@ -227,7 +227,7 @@ public:
     while(true) {
       std::map<std::string, bufferlist> values;
       int r = io->omap_get_vals(object_name, last_key,
-          g_conf->mds_sessionmap_keys_per_op, &values);
+          g_conf()->mds_sessionmap_keys_per_op, &values);
 
       if (r != 0) {
         derr << "error reading values: " << cpp_strerror(r) << dendl;

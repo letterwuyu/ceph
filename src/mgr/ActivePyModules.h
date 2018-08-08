@@ -96,6 +96,7 @@ public:
   int handle_command(
     const std::string &module_name,
     const cmdmap_t &cmdmap,
+    const bufferlist &inbuf,
     std::stringstream *ds,
     std::stringstream *ss);
 
@@ -107,6 +108,25 @@ public:
   void notify_all(const std::string &notify_type,
                   const std::string &notify_id);
   void notify_all(const LogEntry &log_entry);
+
+  bool module_exists(const std::string &name) const
+  {
+    return modules.count(name) > 0;
+  }
+
+  bool method_exists(
+      const std::string &module_name,
+      const std::string &method_name) const
+  {
+    return modules.at(module_name)->method_exists(method_name);
+  }
+
+  PyObject *dispatch_remote(
+      const std::string &other_module,
+      const std::string &method,
+      PyObject *args,
+      PyObject *kwargs,
+      std::string *err);
 
   int init();
   void shutdown();

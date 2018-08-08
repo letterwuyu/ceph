@@ -46,7 +46,7 @@ struct rgw_data_sync_info {
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(2, bl);
      decode(state, bl);
      decode(num_shards, bl);
@@ -120,7 +120,7 @@ struct rgw_data_sync_marker {
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(1, bl);
     decode(state, bl);
     decode(marker, bl);
@@ -184,7 +184,7 @@ struct rgw_data_sync_status {
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(1, bl);
     decode(sync_info, bl);
     /* sync markers are decoded separately */
@@ -396,7 +396,7 @@ struct rgw_bucket_shard_full_sync_marker {
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(1, bl);
     decode(position, bl);
     decode(count, bl);
@@ -421,7 +421,7 @@ struct rgw_bucket_shard_inc_sync_marker {
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(1, bl);
     decode(position, bl);
      DECODE_FINISH(bl);
@@ -459,7 +459,7 @@ struct rgw_bucket_shard_sync_info {
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(1, bl);
      decode(state, bl);
      decode(full_marker, bl);
@@ -474,6 +474,20 @@ struct rgw_bucket_shard_sync_info {
 
 };
 WRITE_CLASS_ENCODER(rgw_bucket_shard_sync_info)
+
+struct rgw_bucket_index_marker_info {
+  string bucket_ver;
+  string master_ver;
+  string max_marker;
+  bool syncstopped{false};
+
+  void decode_json(JSONObj *obj) {
+    JSONDecoder::decode_json("bucket_ver", bucket_ver, obj);
+    JSONDecoder::decode_json("master_ver", master_ver, obj);
+    JSONDecoder::decode_json("max_marker", max_marker, obj);
+    JSONDecoder::decode_json("syncstopped", syncstopped, obj);
+  }
+};
 
 
 class RGWRemoteBucketLog : public RGWCoroutinesManager {
@@ -559,7 +573,7 @@ public:
 
 /// read the sync status of all bucket shards from the given source zone
 int rgw_bucket_sync_status(RGWRados *store, const std::string& source_zone,
-                           const rgw_bucket& bucket,
+                           const RGWBucketInfo& bucket_info,
                            std::vector<rgw_bucket_shard_sync_info> *status);
 
 class RGWDefaultSyncModule : public RGWSyncModule {

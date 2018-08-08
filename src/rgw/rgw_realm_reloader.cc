@@ -44,12 +44,12 @@ RGWRealmReloader::~RGWRealmReloader()
 class RGWRealmReloader::C_Reload : public Context {
   RGWRealmReloader* reloader;
  public:
-  C_Reload(RGWRealmReloader* reloader) : reloader(reloader) {}
+  explicit C_Reload(RGWRealmReloader* reloader) : reloader(reloader) {}
   void finish(int r) override { reloader->reload(); }
 };
 
 void RGWRealmReloader::handle_notify(RGWRealmNotify type,
-                                     bufferlist::iterator& p)
+                                     bufferlist::const_iterator& p)
 {
   if (!store) {
     /* we're in the middle of reload */

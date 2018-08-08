@@ -361,12 +361,12 @@ class OSDStub : public TestStub
 	     << cct->_conf->auth_supported << dendl;
     stringstream ss;
     ss << "client-osd" << whoami;
-    std::string public_msgr_type = cct->_conf->ms_public_type.empty() ? cct->_conf->get_val<std::string>("ms_type") : cct->_conf->ms_public_type;
+    std::string public_msgr_type = cct->_conf->ms_public_type.empty() ? cct->_conf.get_val<std::string>("ms_type") : cct->_conf->ms_public_type;
     messenger.reset(Messenger::create(cct, public_msgr_type, entity_name_t::OSD(whoami),
 				      ss.str().c_str(), getpid(), 0));
 
     Throttle throttler(g_ceph_context, "osd_client_bytes",
-	g_conf->osd_client_message_size_cap);
+	g_conf()->osd_client_message_size_cap);
 
     messenger->set_default_policy(
 	Messenger::Policy::stateless_server(0));
@@ -380,8 +380,8 @@ class OSDStub : public TestStub
     messenger->set_policy(entity_name_t::TYPE_OSD,
 	Messenger::Policy::stateless_server(0));
 
-    dout(10) << __func__ << " public addr " << g_conf->public_addr << dendl;
-    int err = messenger->bind(g_conf->public_addr);
+    dout(10) << __func__ << " public addr " << g_conf()->public_addr << dendl;
+    int err = messenger->bind(g_conf()->public_addr);
     if (err < 0)
       exit(1);
 
@@ -397,8 +397,8 @@ class OSDStub : public TestStub
     Mutex::Locker l(lock);
 
     dout(1) << __func__ << " fsid " << monc.monmap.fsid
-	    << " osd_fsid " << g_conf->osd_uuid << dendl;
-    dout(1) << __func__ << " name " << g_conf->name << dendl;
+	    << " osd_fsid " << g_conf()->osd_uuid << dendl;
+    dout(1) << __func__ << " name " << g_conf()->name << dendl;
 
     timer.init();
     messenger->add_dispatcher_head(this);
@@ -703,7 +703,8 @@ class OSDStub : public TestStub
     int seq = 0;
     for (; num_entries > 0; --num_entries) {
       LogEntry e;
-      e.who = messenger->get_myinst();
+      e.rank = messenger->get_myname();
+      e.addrs.v.push_back(messenger->get_myaddr());
       e.stamp = now;
       e.seq = seq++;
       e.prio = CLOG_DEBUG;
@@ -819,7 +820,7 @@ class OSDStub : public TestStub
 	dout(5) << __func__
 		<< " full epoch " << start_full << dendl;
 	bufferlist &bl = rit->second;
-	bufferlist::iterator p = bl.begin();
+	auto p = bl.cbegin();
 	osdmap.decode(p);
       }
     }
@@ -835,7 +836,7 @@ class OSDStub : public TestStub
 	       << " on full epoch " << start_full << dendl;
       OSDMap::Incremental inc;
       bufferlist &bl = it->second;
-      bufferlist::iterator p = bl.begin();
+      auto p = bl.cbegin();
       inc.decode(p);
 
       int err = osdmap.apply_incremental(inc);
@@ -853,7 +854,7 @@ class OSDStub : public TestStub
     *_dout << dendl;
 
     if (osdmap.is_up(whoami) &&
-	osdmap.get_addr(whoami) == messenger->get_myaddr()) {
+	osdmap.get_addrs(whoami) == messenger->get_myaddrs()) {
       dout(1) << __func__
 	      << " got into the osdmap and we're up!" << dendl;
     }
@@ -897,11 +898,7 @@ class OSDStub : public TestStub
 
   bool ms_handle_reset(Connection *con) override {
     dout(1) << __func__ << dendl;
-    Session *session = (Session *)con->get_priv();
-    if (!session)
-      return false;
-    session->put();
-    return true;
+    return con->get_priv().get();
   }
 
   bool ms_handle_refused(Connection *con) override {
@@ -1004,7 +1001,7 @@ int main(int argc, const char *argv[])
 			 CINIT_FLAG_NO_DEFAULT_CONFIG_FILE);
 
   common_init_finish(g_ceph_context);
-  g_ceph_context->_conf->apply_changes(NULL);
+  g_ceph_context->_conf.apply_changes(nullptr);
 
   set<int> stub_ids;
   double duration = 300.0;

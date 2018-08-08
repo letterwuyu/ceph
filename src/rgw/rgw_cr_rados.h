@@ -248,7 +248,7 @@ int RGWSimpleRadosReadCR<T>::request_complete()
       return ret;
     }
     try {
-      bufferlist::iterator iter = bl.begin();
+      auto iter = bl.cbegin();
       if (iter.end()) {
         // allow successful reads with empty buffers. ReadSyncStatus coroutines
         // depend on this to be able to read without locking, because the
@@ -459,8 +459,8 @@ class RGWRadosRemoveCR : public RGWSimpleCoroutine {
 public:
   RGWRadosRemoveCR(RGWRados *store, const rgw_raw_obj& obj);
 
-  int send_request();
-  int request_complete();
+  int send_request() override;
+  int request_complete() override;
 };
 
 class RGWSimpleRadosLockCR : public RGWSimpleCoroutine {
@@ -741,7 +741,7 @@ class RGWAsyncFetchRemoteObj : public RGWAsyncRadosRequest {
   RGWBucketInfo bucket_info;
 
   rgw_obj_key key;
-  uint64_t versioned_epoch;
+  std::optional<uint64_t> versioned_epoch;
 
   real_time src_mtime;
 
@@ -755,7 +755,7 @@ public:
                          const string& _source_zone,
                          RGWBucketInfo& _bucket_info,
                          const rgw_obj_key& _key,
-                         uint64_t _versioned_epoch,
+                         std::optional<uint64_t> _versioned_epoch,
                          bool _if_newer, rgw_zone_set *_zones_trace) : RGWAsyncRadosRequest(caller, cn), store(_store),
                                                       source_zone(_source_zone),
                                                       bucket_info(_bucket_info),
@@ -773,7 +773,7 @@ class RGWFetchRemoteObjCR : public RGWSimpleCoroutine {
   RGWBucketInfo bucket_info;
 
   rgw_obj_key key;
-  uint64_t versioned_epoch;
+  std::optional<uint64_t> versioned_epoch;
 
   real_time src_mtime;
 
@@ -787,7 +787,7 @@ public:
                       const string& _source_zone,
                       RGWBucketInfo& _bucket_info,
                       const rgw_obj_key& _key,
-                      uint64_t _versioned_epoch,
+                      std::optional<uint64_t> _versioned_epoch,
                       bool _if_newer, rgw_zone_set *_zones_trace) : RGWSimpleCoroutine(_store->ctx()), cct(_store->ctx()),
                                        async_rados(_async_rados), store(_store),
                                        source_zone(_source_zone),
@@ -832,6 +832,7 @@ class RGWAsyncStatRemoteObj : public RGWAsyncRadosRequest {
   uint64_t *psize;
   string *petag;
   map<string, bufferlist> *pattrs;
+  map<string, string> *pheaders;
 
 protected:
   int _send_request() override;
@@ -843,14 +844,16 @@ public:
                          ceph::real_time *_pmtime,
                          uint64_t *_psize,
                          string *_petag,
-                         map<string, bufferlist> *_pattrs) : RGWAsyncRadosRequest(caller, cn), store(_store),
+                         map<string, bufferlist> *_pattrs,
+                         map<string, string> *_pheaders) : RGWAsyncRadosRequest(caller, cn), store(_store),
                                                       source_zone(_source_zone),
                                                       bucket_info(_bucket_info),
                                                       key(_key),
                                                       pmtime(_pmtime),
                                                       psize(_psize),
                                                       petag(_petag),
-                                                      pattrs(_pattrs) {}
+                                                      pattrs(_pattrs),
+                                                      pheaders(_pheaders) {}
 };
 
 class RGWStatRemoteObjCR : public RGWSimpleCoroutine {
@@ -867,6 +870,7 @@ class RGWStatRemoteObjCR : public RGWSimpleCoroutine {
   uint64_t *psize;
   string *petag;
   map<string, bufferlist> *pattrs;
+  map<string, string> *pheaders;
 
   RGWAsyncStatRemoteObj *req;
 
@@ -878,7 +882,8 @@ public:
                       ceph::real_time *_pmtime,
                       uint64_t *_psize,
                       string *_petag,
-                      map<string, bufferlist> *_pattrs) : RGWSimpleCoroutine(_store->ctx()), cct(_store->ctx()),
+                      map<string, bufferlist> *_pattrs,
+                      map<string, string> *_pheaders) : RGWSimpleCoroutine(_store->ctx()), cct(_store->ctx()),
                                        async_rados(_async_rados), store(_store),
                                        source_zone(_source_zone),
                                        bucket_info(_bucket_info),
@@ -887,6 +892,7 @@ public:
                                        psize(_psize),
                                        petag(_petag),
                                        pattrs(_pattrs),
+                                       pheaders(_pheaders),
                                        req(NULL) {}
 
 
@@ -903,7 +909,7 @@ public:
 
   int send_request() override {
     req = new RGWAsyncStatRemoteObj(this, stack->create_completion_notifier(), store, source_zone,
-                                    bucket_info, key, pmtime, psize, petag, pattrs);
+                                    bucket_info, key, pmtime, psize, petag, pattrs, pheaders);
     async_rados->queue(req);
     return 0;
   }

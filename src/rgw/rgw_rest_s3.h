@@ -242,7 +242,7 @@ public:
   RGWPostObj_ObjStore_S3() {}
   ~RGWPostObj_ObjStore_S3() override {}
 
-  int verify_requester(const rgw::auth::StrategyRegistry& auth_registry) {
+  int verify_requester(const rgw::auth::StrategyRegistry& auth_registry) override {
     auth_registry_ptr = &auth_registry;
     return RGWPostObj_ObjStore::verify_requester(auth_registry);
   }
@@ -437,7 +437,7 @@ public:
   RGWGetObjLayout_ObjStore_S3() {}
   ~RGWGetObjLayout_ObjStore_S3() {}
 
-  void send_response();
+  void send_response() override;
 };
 
 class RGWConfigBucketMetaSearch_ObjStore_S3 : public RGWConfigBucketMetaSearch {
@@ -478,7 +478,7 @@ class RGWHandler_Auth_S3 : public RGWHandler_REST {
   const rgw::auth::StrategyRegistry& auth_registry;
 
 public:
-  RGWHandler_Auth_S3(const rgw::auth::StrategyRegistry& auth_registry)
+  explicit RGWHandler_Auth_S3(const rgw::auth::StrategyRegistry& auth_registry)
     : RGWHandler_REST(),
       auth_registry(auth_registry) {
   }
@@ -503,7 +503,7 @@ class RGWHandler_REST_S3 : public RGWHandler_REST {
 public:
   static int init_from_header(struct req_state *s, int default_formatter, bool configurable_format);
 
-  RGWHandler_REST_S3(const rgw::auth::StrategyRegistry& auth_registry)
+  explicit RGWHandler_REST_S3(const rgw::auth::StrategyRegistry& auth_registry)
     : RGWHandler_REST(),
       auth_registry(auth_registry) {
   }
@@ -568,9 +568,6 @@ class RGWHandler_REST_Obj_S3 : public RGWHandler_REST_S3 {
 protected:
   bool is_acl_op() {
     return s->info.args.exists("acl");
-  }
-  bool is_cors_op() {
-      return s->info.args.exists("cors");
   }
   bool is_tagging_op() {
     return s->info.args.exists("tagging");
@@ -772,7 +769,7 @@ class AWSGeneralAbstractor : public AWSEngine::VersionAbstractor {
   auth_data_t get_auth_data_v4(const req_state* s, const bool using_qs) const;
 
 public:
-  AWSGeneralAbstractor(CephContext* const cct)
+  explicit AWSGeneralAbstractor(CephContext* const cct)
     : cct(cct) {
   }
 
@@ -799,7 +796,7 @@ class AWSBrowserUploadAbstractor : public AWSEngine::VersionAbstractor {
   auth_data_t get_auth_data_v4(const req_state* s) const;
 
 public:
-  AWSBrowserUploadAbstractor(CephContext*) {
+  explicit AWSBrowserUploadAbstractor(CephContext*) {
   }
 
   auth_data_t get_auth_data(const req_state* s) const override;
@@ -849,7 +846,6 @@ public:
   static void shutdown();
 };
 
-
 class LocalEngine : public AWSEngine {
   RGWRados* const store;
   const rgw::auth::LocalApplier::Factory* const apl_factory;
@@ -897,7 +893,7 @@ class S3AuthFactory : public rgw::auth::RemoteApplier::Factory,
   RGWRados* const store;
 
 public:
-  S3AuthFactory(RGWRados* const store)
+  explicit S3AuthFactory(RGWRados* const store)
     : store(store) {
   }
 

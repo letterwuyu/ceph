@@ -351,14 +351,14 @@ int MetadataDriver::inject_unlinked_inode(
   inode.inode.nlink = 1;
   inode.inode.truncate_size = -1ull;
   inode.inode.truncate_seq = 1;
-  inode.inode.uid = g_conf->mds_root_ino_uid;
-  inode.inode.gid = g_conf->mds_root_ino_gid;
+  inode.inode.uid = g_conf()->mds_root_ino_uid;
+  inode.inode.gid = g_conf()->mds_root_ino_gid;
 
   // Force layout to default: should we let users override this so that
   // they don't have to mount the filesystem to correct it?
   inode.inode.layout = file_layout_t::get_default();
   inode.inode.layout.pool_id = data_pool_id;
-  inode.inode.dir_layout.dl_dir_hash = g_conf->mds_default_dir_hash;
+  inode.inode.dir_layout.dl_dir_hash = g_conf()->mds_default_dir_hash;
 
   // Assume that we will get our stats wrong, and that we may
   // be ignoring dirfrags that exist
@@ -612,7 +612,7 @@ int DataScan::forall_objects(
         int r = ioctx.getxattr(oid, "scrub_tag", scrub_tag_bl);
         if (r >= 0) {
           std::string read_tag;
-          bufferlist::iterator q = scrub_tag_bl.begin();
+          auto q = scrub_tag_bl.cbegin();
           try {
             decode(read_tag, q);
             if (read_tag == filter_tag) {
@@ -960,7 +960,7 @@ int DataScan::scan_links()
       }
 
       for (auto& p : items) {
-	bufferlist::iterator q = p.second.begin();
+	auto q = p.second.cbegin();
 	string dname;
 	snapid_t last;
 	dentry_key_t::decode_helper(p.first, dname, last);
@@ -1172,7 +1172,7 @@ int DataScan::scan_frags()
 
     if (parent_r != -ENODATA) {
       try {
-        bufferlist::iterator q = parent_bl.begin();
+        auto q = parent_bl.cbegin();
         backtrace.decode(q);
       } catch (buffer::error &e) {
         dout(4) << "Corrupt backtrace on '" << oid << "': " << e << dendl;
@@ -1187,7 +1187,7 @@ int DataScan::scan_frags()
 
     if (layout_r != -ENODATA) {
       try {
-        bufferlist::iterator q = layout_bl.begin();
+        auto q = layout_bl.cbegin();
         decode(loaded_layout, q);
       } catch (buffer::error &e) {
         dout(4) << "Corrupt layout on '" << oid << "': " << e << dendl;
@@ -1286,7 +1286,7 @@ int MetadataTool::read_fnode(
     return r;
   }
 
-  bufferlist::iterator old_fnode_iter = fnode_bl.begin();
+  auto old_fnode_iter = fnode_bl.cbegin();
   try {
     (*fnode).decode(old_fnode_iter);
   } catch (const buffer::error &err) {
@@ -1325,7 +1325,7 @@ int MetadataTool::read_dentry(inodeno_t parent_ino, frag_t frag,
   }
 
   try {
-    bufferlist::iterator q = vals[key].begin();
+    auto q = vals[key].cbegin();
     snapid_t dnfirst;
     decode(dnfirst, q);
     char dentry_type;
@@ -1427,7 +1427,7 @@ int MetadataDriver::get_frag_of(
   inode_backtrace_t backtrace;
   if (parent_bl.length()) {
     try {
-      bufferlist::iterator q = parent_bl.begin();
+      auto q = parent_bl.cbegin();
       backtrace.decode(q);
       have_backtrace = true;
     } catch (buffer::error &e) {
@@ -1644,12 +1644,12 @@ int MetadataDriver::inject_with_backtrace(
 
         ancestor_dentry.inode.dirstat.nfiles = 1;
         ancestor_dentry.inode.dir_layout.dl_dir_hash =
-                                               g_conf->mds_default_dir_hash;
+                                               g_conf()->mds_default_dir_hash;
 
         ancestor_dentry.inode.nlink = 1;
         ancestor_dentry.inode.ino = ino;
-        ancestor_dentry.inode.uid = g_conf->mds_root_ino_uid;
-        ancestor_dentry.inode.gid = g_conf->mds_root_ino_gid;
+        ancestor_dentry.inode.uid = g_conf()->mds_root_ino_uid;
+        ancestor_dentry.inode.gid = g_conf()->mds_root_ino_gid;
         ancestor_dentry.inode.version = 1;
         ancestor_dentry.inode.backtrace_version = 1;
         r = inject_linkage(parent_ino, dname, fragment, ancestor_dentry);
@@ -1974,8 +1974,8 @@ void MetadataTool::build_file_dentry(
   out->inode.ino = ino;
   out->inode.version = 1;
   out->inode.backtrace_version = 1;
-  out->inode.uid = g_conf->mds_root_ino_uid;
-  out->inode.gid = g_conf->mds_root_ino_gid;
+  out->inode.uid = g_conf()->mds_root_ino_uid;
+  out->inode.gid = g_conf()->mds_root_ino_gid;
 }
 
 void MetadataTool::build_dir_dentry(
@@ -1991,7 +1991,7 @@ void MetadataTool::build_dir_dentry(
   out->inode.ctime.tv.tv_sec = fragstat.mtime;
 
   out->inode.layout = layout;
-  out->inode.dir_layout.dl_dir_hash = g_conf->mds_default_dir_hash;
+  out->inode.dir_layout.dl_dir_hash = g_conf()->mds_default_dir_hash;
 
   out->inode.truncate_seq = 1;
   out->inode.truncate_size = -1ull;
@@ -2002,7 +2002,7 @@ void MetadataTool::build_dir_dentry(
   out->inode.ino = ino;
   out->inode.version = 1;
   out->inode.backtrace_version = 1;
-  out->inode.uid = g_conf->mds_root_ino_uid;
-  out->inode.gid = g_conf->mds_root_ino_gid;
+  out->inode.uid = g_conf()->mds_root_ino_uid;
+  out->inode.gid = g_conf()->mds_root_ino_gid;
 }
 

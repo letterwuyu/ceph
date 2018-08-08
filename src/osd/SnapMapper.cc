@@ -63,7 +63,7 @@ struct Mapping {
     encode(hoid, bl);
     ENCODE_FINISH(bl);
   }
-  void decode(bufferlist::iterator &bl) {
+  void decode(bufferlist::const_iterator &bl) {
     DECODE_START(1, bl);
     decode(snap, bl);
     decode(hoid, bl);
@@ -103,7 +103,7 @@ pair<snapid_t, hobject_t> SnapMapper::from_raw(
 {
   Mapping map;
   bufferlist bl(image.second);
-  bufferlist::iterator bp(bl.begin());
+  auto bp = bl.cbegin();
   decode(map, bp);
   return make_pair(map.snap, map.hoid);
 }
@@ -126,7 +126,7 @@ void SnapMapper::object_snaps::encode(bufferlist &bl) const
   ENCODE_FINISH(bl);
 }
 
-void SnapMapper::object_snaps::decode(bufferlist::iterator &bl)
+void SnapMapper::object_snaps::decode(bufferlist::const_iterator &bl)
 {
   DECODE_START(1, bl);
   decode(oid, bl);
@@ -163,7 +163,7 @@ int SnapMapper::get_snaps(
     return -ENOENT;
   }
   if (out) {
-    bufferlist::iterator bp = got.begin()->second.begin();
+    auto bp = got.begin()->second.cbegin();
     decode(*out, bp);
     dout(20) << __func__ << " " << oid << " " << out->snaps << dendl;
     if (out->snaps.empty()) {
@@ -184,7 +184,7 @@ void SnapMapper::clear_snaps(
   assert(check(oid));
   set<string> to_remove;
   to_remove.insert(to_object_key(oid));
-  if (g_conf->subsys.should_gather<ceph_subsys_osd, 20>()) {
+  if (g_conf()->subsys.should_gather<ceph_subsys_osd, 20>()) {
     for (auto& i : to_remove) {
       dout(20) << __func__ << " rm " << i << dendl;
     }
@@ -203,7 +203,7 @@ void SnapMapper::set_snaps(
   encode(in, bl);
   to_set[to_object_key(oid)] = bl;
   dout(20) << __func__ << " " << oid << " " << in.snaps << dendl;
-  if (g_conf->subsys.should_gather<ceph_subsys_osd, 20>()) {
+  if (g_conf()->subsys.should_gather<ceph_subsys_osd, 20>()) {
     for (auto& i : to_set) {
       dout(20) << __func__ << " set " << i.first << dendl;
     }
@@ -242,7 +242,7 @@ int SnapMapper::update_snaps(
       to_remove.insert(to_raw_key(make_pair(*i, oid)));
     }
   }
-  if (g_conf->subsys.should_gather<ceph_subsys_osd, 20>()) {
+  if (g_conf()->subsys.should_gather<ceph_subsys_osd, 20>()) {
     for (auto& i : to_remove) {
       dout(20) << __func__ << " rm " << i << dendl;
     }
@@ -279,7 +279,7 @@ void SnapMapper::add_oid(
        ++i) {
     to_add.insert(to_raw(make_pair(*i, oid)));
   }
-  if (g_conf->subsys.should_gather<ceph_subsys_osd, 20>()) {
+  if (g_conf()->subsys.should_gather<ceph_subsys_osd, 20>()) {
     for (auto& i : to_add) {
       dout(20) << __func__ << " set " << i.first << dendl;
     }
@@ -360,7 +360,7 @@ int SnapMapper::_remove_oid(
        ++i) {
     to_remove.insert(to_raw_key(make_pair(*i, oid)));
   }
-  if (g_conf->subsys.should_gather<ceph_subsys_osd, 20>()) {
+  if (g_conf()->subsys.should_gather<ceph_subsys_osd, 20>()) {
     for (auto& i : to_remove) {
       dout(20) << __func__ << " rm " << i << dendl;
     }

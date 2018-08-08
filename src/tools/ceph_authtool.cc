@@ -14,7 +14,7 @@
 
 #include "common/ConfUtils.h"
 #include "common/ceph_argparse.h"
-#include "common/config.h"
+#include "common/config_proxy.h"
 #include "global/global_context.h"
 #include "global/global_init.h"
 
@@ -168,7 +168,7 @@ int main(int argc, const char **argv)
   }
 
   common_init_finish(g_ceph_context);
-  EntityName ename(g_conf->name);
+  EntityName ename(g_conf()->name);
 
   // Enforce the use of gen-key or add-key when creating to avoid ending up
   // with an "empty" key (key = AAAAAAAAAAAAAAAA)
@@ -198,7 +198,7 @@ int main(int argc, const char **argv)
     r = bl.read_file(fn.c_str(), &err);
     if (r >= 0) {
       try {
-	bufferlist::iterator iter = bl.begin();
+	auto iter = bl.cbegin();
 	decode(keyring, iter);
       } catch (const buffer::error &err) {
 	cerr << "error reading file " << fn << std::endl;
@@ -229,7 +229,7 @@ int main(int argc, const char **argv)
     int r = obl.read_file(import_keyring.c_str(), &err);
     if (r >= 0) {
       try {
-	bufferlist::iterator iter = obl.begin();
+	auto iter = obl.cbegin();
 	decode(other, iter);
       } catch (const buffer::error &err) {
 	cerr << "error reading file " << import_keyring << std::endl;

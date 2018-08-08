@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# pylint: disable=W0212,too-many-arguments
+# pylint: disable=too-many-arguments
 from __future__ import absolute_import
 
 import json
@@ -7,11 +7,13 @@ import threading
 import time
 
 import cherrypy
+from cherrypy._cptools import HandlerWrapperTool
 from cherrypy.test import helper
 
 from .. import logger
-from ..controllers.auth import Auth
 from ..controllers import json_error_page, generate_controller_routes
+from ..services.auth import AuthManagerTool
+from ..services.exception import dashboard_exception_handler
 from ..tools import SessionExpireAtBrowserCloseTool
 
 
@@ -21,16 +23,25 @@ class ControllerTestCase(helper.CPWebCase):
         if not isinstance(ctrl_classes, list):
             ctrl_classes = [ctrl_classes]
         mapper = cherrypy.dispatch.RoutesDispatcher()
+        endpoint_list = []
         for ctrl in ctrl_classes:
-            generate_controller_routes(ctrl, mapper, base_url)
+            inst = ctrl()
+            for endpoint in ctrl.endpoints():
+                endpoint.inst = inst
+                endpoint_list.append(endpoint)
+        endpoint_list = sorted(endpoint_list, key=lambda e: e.url)
+        for endpoint in endpoint_list:
+            generate_controller_routes(endpoint, mapper, base_url)
         if base_url == '':
             base_url = '/'
         cherrypy.tree.mount(None, config={
             base_url: {'request.dispatch': mapper}})
 
     def __init__(self, *args, **kwargs):
-        cherrypy.tools.authenticate = cherrypy.Tool('before_handler', Auth.check_auth)
+        cherrypy.tools.authenticate = AuthManagerTool()
         cherrypy.tools.session_expire_at_browser_close = SessionExpireAtBrowserCloseTool()
+        cherrypy.tools.dashboard_exception_handler = HandlerWrapperTool(dashboard_exception_handler,
+                                                                        priority=31)
         cherrypy.config.update({'error_page.default': json_error_page})
         super(ControllerTestCase, self).__init__(*args, **kwargs)
 
@@ -70,6 +81,7 @@ class ControllerTestCase(helper.CPWebCase):
         task_name = res['name']
         task_metadata = res['metadata']
 
+        # pylint: disable=protected-access
         class Waiter(threading.Thread):
             def __init__(self, task_name, task_metadata, tc):
                 super(Waiter, self).__init__()
@@ -86,7 +98,7 @@ class ControllerTestCase(helper.CPWebCase):
                     logger.info("task (%s, %s) is still executing", self.task_name,
                                 self.task_metadata)
                     time.sleep(1)
-                    self.tc._get('/task?name={}'.format(self.task_name))
+                    self.tc._get('/api/task?name={}'.format(self.task_name))
                     res = self.tc.jsonBody()
                     for task in res['finished_tasks']:
                         if task['metadata'] == self.task_metadata:
@@ -119,7 +131,7 @@ class ControllerTestCase(helper.CPWebCase):
                 self.status = thread.res_task['exception']['status']
             else:
                 self.status = 500
-            self.body = json.dumps(thread.rest_task['exception'])
+            self.body = json.dumps(thread.res_task['exception'])
             return
 
     def _task_post(self, url, data=None, timeout=60):

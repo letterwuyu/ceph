@@ -150,27 +150,23 @@ class MDCache {
 
   bool exceeded_size_limit;
 
+private:
+  uint64_t cache_inode_limit;
+  uint64_t cache_memory_limit;
+  double cache_reservation;
+  double cache_health_threshold;
+
 public:
-  static uint64_t cache_limit_inodes(void) {
-    return g_conf->get_val<int64_t>("mds_cache_size");
+  uint64_t cache_limit_inodes(void) {
+    return cache_inode_limit;
   }
-  static uint64_t cache_limit_memory(void) {
-    return g_conf->get_val<uint64_t>("mds_cache_memory_limit");
-  }
-  static double cache_reservation(void) {
-    return g_conf->get_val<double>("mds_cache_reservation");
-  }
-  static double cache_mid(void) {
-    return g_conf->get_val<double>("mds_cache_mid");
-  }
-  static double cache_health_threshold(void) {
-    return g_conf->get_val<double>("mds_health_cache_threshold");
+  uint64_t cache_limit_memory(void) {
+    return cache_memory_limit;
   }
   double cache_toofull_ratio(void) const {
-    uint64_t inode_limit = cache_limit_inodes();
-    double inode_reserve = inode_limit*(1.0-cache_reservation());
-    double memory_reserve = cache_limit_memory()*(1.0-cache_reservation());
-    return fmax(0.0, fmax((cache_size()-memory_reserve)/memory_reserve, inode_limit == 0 ? 0.0 : (CInode::count()-inode_reserve)/inode_reserve));
+    double inode_reserve = cache_inode_limit*(1.0-cache_reservation);
+    double memory_reserve = cache_memory_limit*(1.0-cache_reservation);
+    return fmax(0.0, fmax((cache_size()-memory_reserve)/memory_reserve, cache_inode_limit == 0 ? 0.0 : (CInode::count()-inode_reserve)/inode_reserve));
   }
   bool cache_toofull(void) const {
     return cache_toofull_ratio() > 0.0;
@@ -179,8 +175,7 @@ public:
     return mempool::get_pool(mempool::mds_co::id).allocated_bytes();
   }
   bool cache_overfull(void) const {
-    uint64_t inode_limit = cache_limit_inodes();
-    return (inode_limit > 0 && CInode::count() > inode_limit*cache_health_threshold()) || (cache_size() > cache_limit_memory()*cache_health_threshold());
+    return (cache_inode_limit > 0 && CInode::count() > cache_inode_limit*cache_health_threshold) || (cache_size() > cache_memory_limit*cache_health_threshold);
   }
 
   void advance_stray() {
@@ -290,7 +285,7 @@ public:
   }
 
   // waiters
-  map<int, map<inodeno_t, list<MDSInternalContextBase*> > > waiting_for_base_ino;
+  map<int, map<inodeno_t, MDSInternalContextBase::vec > > waiting_for_base_ino;
 
   void discover_base_ino(inodeno_t want_ino, MDSInternalContextBase *onfinish, mds_rank_t from=MDS_RANK_NONE);
   void discover_dir_frag(CInode *base, frag_t approx_fg, MDSInternalContextBase *onfinish,
@@ -404,7 +399,7 @@ public:
   void project_rstat_frag_to_inode(nest_info_t& rstat, nest_info_t& accounted_rstat,
 				   snapid_t ofirst, snapid_t last, 
 				   CInode *pin, bool cow_head);
-  void broadcast_quota_to_client(CInode *in);
+  void broadcast_quota_to_client(CInode *in, client_t exclude_ct = -1);
   void predirty_journal_parents(MutationRef mut, EMetaBlob *blob,
 				CInode *in, CDir *parent,
 				int flags, int linkunlink=0,
@@ -455,7 +450,7 @@ protected:
   struct umaster {
     set<mds_rank_t> slaves;
     LogSegment *ls;
-    list<MDSInternalContextBase*> waiters;
+    MDSInternalContextBase::vec waiters;
     bool safe;
     bool committing;
     bool recovering;
@@ -543,6 +538,7 @@ public:
 
   void clean_open_file_lists();
   void dump_openfiles(Formatter *f);
+  bool dump_inode(Formatter *f, uint64_t number);
 protected:
   // [rejoin]
   bool rejoins_pending;
@@ -552,14 +548,16 @@ protected:
   set<mds_rank_t> rejoin_ack_gather;  // nodes from whom i need a rejoin ack
   map<mds_rank_t,map<inodeno_t,map<client_t,Capability::Import> > > rejoin_imported_caps;
   map<inodeno_t,pair<mds_rank_t,map<client_t,Capability::Export> > > rejoin_slave_exports;
-  map<client_t,entity_inst_t> rejoin_client_map;
 
-  map<inodeno_t,map<client_t,cap_reconnect_t> > cap_exports; // ino -> client -> capex
-  map<inodeno_t,mds_rank_t> cap_export_targets; // ino -> auth mds
+  map<client_t,entity_inst_t> rejoin_client_map;
+  map<client_t,client_metadata_t> rejoin_client_metadata_map;
+  map<client_t,pair<Session*,uint64_t> > rejoin_session_map;
+
+  map<inodeno_t,pair<mds_rank_t,map<client_t,cap_reconnect_t> > > cap_exports; // ino -> target, client -> capex
 
   map<inodeno_t,map<client_t,map<mds_rank_t,cap_reconnect_t> > > cap_imports;  // ino -> client -> frommds -> capex
   set<inodeno_t> cap_imports_missing;
-  map<inodeno_t, list<MDSInternalContextBase*> > cap_reconnect_waiters;
+  map<inodeno_t, MDSInternalContextBase::vec > cap_reconnect_waiters;
   int cap_imports_num_opening;
   
   set<CInode*> rejoin_undef_inodes;
@@ -569,7 +567,7 @@ protected:
 
   vector<CInode*> rejoin_recover_q, rejoin_check_q;
   list<SimpleLock*> rejoin_eval_locks;
-  list<MDSInternalContextBase*> rejoin_waiters;
+  MDSInternalContextBase::vec rejoin_waiters;
 
   void rejoin_walk(CDir *dir, MMDSCacheRejoin *rejoin);
   void handle_cache_rejoin(MMDSCacheRejoin *m);
@@ -595,12 +593,16 @@ public:
   void rejoin_send_rejoins();
   void rejoin_export_caps(inodeno_t ino, client_t client, const cap_reconnect_t& icr,
 			  int target=-1) {
-    cap_exports[ino][client] = icr;
-    cap_export_targets[ino] = target;
+    auto& ex = cap_exports[ino];
+    ex.first = target;
+    ex.second[client] = icr;
   }
   void rejoin_recovered_caps(inodeno_t ino, client_t client, const cap_reconnect_t& icr, 
 			     mds_rank_t frommds=MDS_RANK_NONE) {
     cap_imports[ino][client][frommds] = icr;
+  }
+  void rejoin_recovered_client(client_t client, const entity_inst_t& inst) {
+    rejoin_client_map.emplace(client, inst);
   }
   bool rejoin_has_cap_reconnect(inodeno_t ino) const {
     return cap_imports.count(ino);
@@ -656,8 +658,7 @@ public:
   friend class C_MDC_RejoinSessionsOpened;
   void rejoin_open_ino_finish(inodeno_t ino, int ret);
   void rejoin_prefetch_ino_finish(inodeno_t ino, int ret);
-  void rejoin_open_sessions_finish(map<client_t,entity_inst_t> client_map,
-				   map<client_t,uint64_t>& sseqmap);
+  void rejoin_open_sessions_finish(map<client_t,pair<Session*,uint64_t> >& session_map);
   bool process_imported_caps();
   void choose_lock_states_and_reconnect_caps();
   void prepare_realm_split(SnapRealm *realm, client_t client, inodeno_t ino,
@@ -716,6 +717,9 @@ public:
  public:
   explicit MDCache(MDSRank *m, PurgeQueue &purge_queue_);
   ~MDCache();
+  void handle_conf_change(const ConfigProxy& conf,
+                          const std::set <std::string> &changed,
+                          const MDSMap &mds_map);
   
   // debug
   void log_stat();
@@ -895,7 +899,7 @@ protected:
 
 private:
   bool opening_root, open;
-  list<MDSInternalContextBase*> waiting_for_open;
+  MDSInternalContextBase::vec waiting_for_open;
 
 public:
   void init_layouts();
@@ -915,6 +919,7 @@ public:
   void open_root_inode(MDSInternalContextBase *c);
   void open_root();
   void open_mydir_inode(MDSInternalContextBase *c);
+  void open_mydir_frag(MDSInternalContextBase *c);
   void populate_mydir();
 
   void _create_system_file(CDir *dir, const char *name, CInode *in, MDSInternalContextBase *fin);
@@ -995,7 +1000,7 @@ protected:
     version_t tid;
     int64_t pool;
     int last_err;
-    list<MDSInternalContextBase*> waiters;
+    MDSInternalContextBase::vec waiters;
     open_ino_info_t() : checking(MDS_RANK_NONE), auth_hint(MDS_RANK_NONE),
       check_peers(true), fetch_backtrace(true), discover(false),
       want_replica(false), want_xlocked(false), tid(0), pool(-1),
@@ -1084,9 +1089,9 @@ public:
   void replicate_inode(CInode *in, mds_rank_t to, bufferlist& bl,
 		       uint64_t features);
   
-  CDir* add_replica_dir(bufferlist::iterator& p, CInode *diri, mds_rank_t from, list<MDSInternalContextBase*>& finished);
-  CDentry *add_replica_dentry(bufferlist::iterator& p, CDir *dir, list<MDSInternalContextBase*>& finished);
-  CInode *add_replica_inode(bufferlist::iterator& p, CDentry *dn, list<MDSInternalContextBase*>& finished);
+  CDir* add_replica_dir(bufferlist::const_iterator& p, CInode *diri, mds_rank_t from, MDSInternalContextBase::vec& finished);
+  CDentry *add_replica_dentry(bufferlist::const_iterator& p, CDir *dir, MDSInternalContextBase::vec& finished);
+  CInode *add_replica_inode(bufferlist::const_iterator& p, CDentry *dn, MDSInternalContextBase::vec& finished);
 
   void replicate_stray(CDentry *straydn, mds_rank_t who, bufferlist& bl);
   CDentry *add_replica_stray(bufferlist &bl, mds_rank_t from);
@@ -1106,7 +1111,7 @@ private:
     int bits;
     bool committed;
     LogSegment *ls;
-    list<MDSInternalContextBase*> waiters;
+    MDSInternalContextBase::vec waiters;
     list<frag_t> old_frags;
     bufferlist rollback;
     ufragment() : bits(0), committed(false), ls(NULL) {}
@@ -1129,12 +1134,12 @@ private:
   map<dirfrag_t,fragment_info_t> fragments;
 
   void adjust_dir_fragments(CInode *diri, frag_t basefrag, int bits,
-			    list<CDir*>& frags, list<MDSInternalContextBase*>& waiters, bool replay);
+			    list<CDir*>& frags, MDSInternalContextBase::vec& waiters, bool replay);
   void adjust_dir_fragments(CInode *diri,
 			    list<CDir*>& srcfrags,
 			    frag_t basefrag, int bits,
 			    list<CDir*>& resultfrags, 
-			    list<MDSInternalContextBase*>& waiters,
+			    MDSInternalContextBase::vec& waiters,
 			    bool replay);
   CDir *force_dir_fragment(CInode *diri, frag_t fg, bool replay=true);
   void get_force_dirfrag_bound_set(vector<dirfrag_t>& dfs, set<CDir*>& bounds);
@@ -1227,9 +1232,11 @@ protected:
    * long time)
    */
   void enqueue_scrub_work(MDRequestRef& mdr);
+  void recursive_scrub_finish(const ScrubHeaderRef& header);
   void repair_inode_stats_work(MDRequestRef& mdr);
   void repair_dirfrag_stats_work(MDRequestRef& mdr);
-  friend class C_MDC_RepairDirfragStats;
+  void upgrade_inode_snaprealm_work(MDRequestRef& mdr);
+  friend class C_MDC_RespondInternalRequest;
 public:
   void flush_dentry(std::string_view path, Context *fin);
   /**
@@ -1240,6 +1247,7 @@ public:
 		     Formatter *f, Context *fin);
   void repair_inode_stats(CInode *diri);
   void repair_dirfrag_stats(CDir *dir);
+  void upgrade_inode_snaprealm(CInode *in);
 
 public:
   /* Because exports may fail, this set lets us keep track of inodes that need exporting. */

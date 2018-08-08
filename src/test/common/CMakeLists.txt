@@ -113,7 +113,7 @@ add_executable(unittest_throttle
   Throttle.cc
   $<TARGET_OBJECTS:unit-main>
   )
-add_ceph_unittest(unittest_throttle)
+add_ceph_unittest(unittest_throttle parallel)
 target_link_libraries(unittest_throttle global) 
 
 # unittest_lru
@@ -290,3 +290,11 @@ add_executable(unittest_hobject test_hobject.cc
   $<TARGET_OBJECTS:unit-main>)
 target_link_libraries(unittest_hobject global ceph-common)
 add_ceph_unittest(unittest_hobject)
+
+add_executable(unittest_async_completion test_async_completion.cc)
+add_ceph_unittest(unittest_async_completion)
+target_link_libraries(unittest_async_completion Boost::system)
+
+add_executable(unittest_async_shared_mutex test_async_shared_mutex.cc)
+add_ceph_unittest(unittest_async_shared_mutex)
+target_link_libraries(unittest_async_shared_mutex Boost::system)

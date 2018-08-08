@@ -195,9 +195,13 @@ object_t OpenFileTable::get_object_name(unsigned idx) const
 
 void OpenFileTable::_encode_header(bufferlist &bl, int j_state)
 {
+  std::string_view magic = CEPH_FS_ONDISK_MAGIC;
+  encode(magic, bl);
+  ENCODE_START(1, 1, bl);
   encode(omap_version, bl);
   encode(omap_num_objs, bl);
   encode((__u8)j_state, bl);
+  ENCODE_FINISH(bl);
 }
 
 class C_IO_OFT_Save : public MDSIOContextBase {
@@ -211,6 +215,9 @@ public:
     oft(t), log_seq(s), fin(c) {}
   void finish(int r) {
     oft->_commit_finish(r, log_seq, fin);
+  }
+  void print(ostream& out) const override {
+    out << "openfiles_save";
   }
 };
 
@@ -246,6 +253,9 @@ public:
   }
   void finish(int r) {
     oft->_journal_finish(r, log_seq, fin, ops_map);
+  }
+  void print(ostream& out) const override {
+    out << "openfiles_journal";
   }
 };
 
@@ -292,7 +302,6 @@ void OpenFileTable::commit(MDSInternalContextBase *c, uint64_t log_seq, int op_p
   SnapContext snapc;
   object_locator_t oloc(mds->mdsmap->get_metadata_pool());
 
-  const unsigned max_items_per_obj = 1024 * 1024;
   const unsigned max_write_size = mds->mdcache->max_dir_commit_size;
 
   struct omap_update_ctl {
@@ -456,11 +465,12 @@ void OpenFileTable::commit(MDSInternalContextBase *c, uint64_t log_seq, int op_p
 	assert(it.second == DIRTY_NEW);
 	// find omap object to store the key
 	for (unsigned i = first_free_idx; i < omap_num_objs; i++) {
-	  if (omap_num_items[i] < max_items_per_obj)
+	  if (omap_num_items[i] < MAX_ITEMS_PER_OBJ)
 	    omap_idx = i;
 	}
 	if (omap_idx < 0) {
 	  ++omap_num_objs;
+	  assert(omap_num_objs <= MAX_OBJECTS);
 	  omap_num_items.resize(omap_num_objs);
 	  omap_updates.resize(omap_num_objs);
 	  omap_updates.back().clear = true;
@@ -476,7 +486,7 @@ void OpenFileTable::commit(MDSInternalContextBase *c, uint64_t log_seq, int op_p
       unsigned& count = omap_num_items.at(omap_idx);
       assert(count > 0);
       --count;
-      if ((unsigned)omap_idx < first_free_idx && count < max_items_per_obj)
+      if ((unsigned)omap_idx < first_free_idx && count < MAX_ITEMS_PER_OBJ)
 	first_free_idx = omap_idx;
     }
     auto& ctl = omap_updates.at(omap_idx);
@@ -642,8 +652,11 @@ public:
 
   C_IO_OFT_Load(OpenFileTable *t, unsigned i, bool f) :
     oft(t), index(i), first(f) {}
-  void finish(int r) {
+  void finish(int r) override {
     oft->_load_finish(r, header_r, values_r, index, first, more, header_bl, values);
+  }
+  void print(ostream& out) const override {
+    out << "openfiles_load";
   }
 };
 
@@ -653,8 +666,11 @@ protected:
   MDSRank *get_mds() override { return oft->mds; }
 public:
   C_IO_OFT_Recover(OpenFileTable *t) : oft(t) {}
-  void finish(int r) {
+  void finish(int r) override {
     oft->_recover_finish(r);
+  }
+  void print(ostream& out) const override {
+    out << "openfiles_recover";
   }
 };
 
@@ -682,7 +698,7 @@ void OpenFileTable::_load_finish(int op_r, int header_r, int values_r,
   int err = -EINVAL;
 
   auto decode_func = [this](unsigned idx, inodeno_t ino, bufferlist &bl) {
-    bufferlist::iterator p = bl.begin();
+    auto p = bl.cbegin();
 
     size_t count = loaded_anchor_map.size();
     auto it = loaded_anchor_map.emplace_hint(loaded_anchor_map.end(),
@@ -712,13 +728,43 @@ void OpenFileTable::_load_finish(int op_r, int header_r, int values_r,
 
   try {
     if (first) {
-      bufferlist::iterator p = header_bl.begin();
+      auto p = header_bl.cbegin();
+
+      string magic;
       version_t version;
       unsigned num_objs;
       __u8 jstate;
-      decode(version, p);
-      decode(num_objs, p);
-      decode(jstate, p);
+
+      if (header_bl.length() == 13) {
+	// obsolete format.
+	decode(version, p);
+	decode(num_objs, p);
+	decode(jstate, p);
+      } else {
+	decode(magic, p);
+	if (magic != CEPH_FS_ONDISK_MAGIC) {
+	  std::ostringstream oss;
+	  oss << "invalid magic '" << magic << "'";
+	  throw buffer::malformed_input(oss.str());
+	}
+
+	DECODE_START(1, p);
+	decode(version, p);
+	decode(num_objs, p);
+	decode(jstate, p);
+	DECODE_FINISH(p);
+      }
+
+      if (num_objs > MAX_OBJECTS) {
+	  std::ostringstream oss;
+	  oss << "invalid object count '" << num_objs << "'";
+	  throw buffer::malformed_input(oss.str());
+      }
+      if (jstate > JOURNAL_FINISH) {
+	  std::ostringstream oss;
+	  oss << "invalid journal state '" << jstate << "'";
+	  throw buffer::malformed_input(oss.str());
+      }
 
       if (version > omap_version) {
 	omap_version = version;
@@ -793,7 +839,7 @@ void OpenFileTable::_load_finish(int op_r, int header_r, int values_r,
 	for (auto& it : loaded_journal) {
 	  if (journal_state != JOURNAL_FINISH)
 	    continue;
-	  bufferlist::iterator p = it.second.begin();
+	  auto p = it.second.cbegin();
 	  version_t version;
 	  std::map<string, bufferlist> to_update;
 	  std::set<string> to_remove;
@@ -1011,10 +1057,14 @@ void OpenFileTable::_prefetch_dirfrags()
   }
 
   MDSGatherBuilder gather(g_ceph_context);
+  int num_opening_dirfrags = 0;
   for (auto dir : fetch_queue) {
     if (dir->state_test(CDir::STATE_REJOINUNDEF))
       assert(dir->get_inode()->dirfragtree.is_leaf(dir->get_frag()));
     dir->fetch(gather.new_sub());
+
+    if (!(++num_opening_dirfrags % 1000))
+      mds->heartbeat_reset();
   }
 
   auto finish_func = [this](int r) {
@@ -1077,6 +1127,9 @@ void OpenFileTable::_prefetch_inodes()
 
     num_opening_inodes++;
     mdcache->open_ino(it.first, pool, new C_OFT_OpenInoFinish(this, it.first), false);
+
+    if (!(num_opening_inodes % 1000))
+      mds->heartbeat_reset();
   }
 
   _open_ino_finish(inodeno_t(0), 0);

@@ -7,7 +7,6 @@
 #include <set>
 #include <vector>
 #include <utility>
-#include "memory.h"
 #include "buffer.h"
 
 #include "librados.h"
@@ -474,6 +473,7 @@ namespace librados
     void set_chunk(uint64_t src_offset, uint64_t src_length, const IoCtx& tgt_ioctx,
                    std::string tgt_oid, uint64_t tgt_offset, int flag = 0);
     void tier_promote();
+    void unset_manifest();
 
 
     friend class IoCtx;
@@ -1141,7 +1141,7 @@ namespace librados
     int unwatch2(uint64_t handle);
     int aio_unwatch(uint64_t handle, AioCompletion *c);
     /**
-     * Send a notify event ot watchers
+     * Send a notify event to watchers
      *
      * Upon completion the pbl bufferlist reply payload will be
      * encoded like so:
@@ -1189,8 +1189,8 @@ namespace librados
      * a known error, return it.
      *
      * If there is an error, the watch is no longer valid, and should
-     * be destroyed with unwatch().  The the user is still interested
-     * in the object, a new watch should be created with watch().
+     * be destroyed with unwatch().  The user is still interested in
+     * the object, a new watch should be created with watch().
      *
      * @param cookie watch handle
      * @returns ms since last confirmed valid, or error
@@ -1241,6 +1241,7 @@ namespace librados
 
     void locator_set_key(const std::string& key);
     void set_namespace(const std::string& nspace);
+    std::string get_namespace() const;
 
     int64_t get_id();
 

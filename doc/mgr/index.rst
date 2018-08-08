@@ -27,6 +27,7 @@ sensible.
 
     Installation and Configuration <administrator>
     Writing plugins <plugins>
+    Writing orchestrator plugins <orchestrator_modules>
     Balancer plugin <balancer>
     Dashboard plugin <dashboard>
     Local pool plugin <localpool>
@@ -35,4 +36,10 @@ sensible.
     Prometheus plugin <prometheus>
     Influx plugin <influx>
     Hello plugin <hello>
-
+    Telegraf plugin <telegraf>
+    Telemetry plugin <telemetry>
+    Iostat plugin <iostat>
+    Crash plugin <crash>
+    Devicehealth plugin <devicehealth>
+    Orchestrator CLI plugin <orchestrator_cli>
+    Rook plugin <rook>

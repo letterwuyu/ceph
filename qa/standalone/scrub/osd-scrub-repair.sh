@@ -489,7 +489,7 @@ function TEST_list_missing_erasure_coded_overwrites() {
 function TEST_corrupt_scrub_replicated() {
     local dir=$1
     local poolname=csr_pool
-    local total_objs=16
+    local total_objs=18
 
     setup $dir || return 1
     run_mon $dir a --osd_pool_default_size=2 || return 1
@@ -611,6 +611,24 @@ function TEST_corrupt_scrub_replicated() {
             objectstore_tool $dir 0 $objname rm-attr snapset || return 1
             echo -n bad-val > $dir/bad-val
             objectstore_tool $dir 1 $objname set-attr snapset $dir/bad-val || return 1
+	    ;;
+
+	17)
+	    # Deep-scrub only (all replicas are diffent than the object info
+           local payload=ROBJ17
+           echo $payload > $dir/new.ROBJ17
+	   objectstore_tool $dir 0 $objname set-bytes $dir/new.ROBJ17 || return 1
+	   objectstore_tool $dir 1 $objname set-bytes $dir/new.ROBJ17 || return 1
+	   ;;
+
+	18)
+	    # Deep-scrub only (all replicas are diffent than the object info
+           local payload=ROBJ18
+           echo $payload > $dir/new.ROBJ18
+	   objectstore_tool $dir 0 $objname set-bytes $dir/new.ROBJ18 || return 1
+	   objectstore_tool $dir 1 $objname set-bytes $dir/new.ROBJ18 || return 1
+	   # Make one replica have a different object info, so a full repair must happen too
+	   objectstore_tool $dir $osd $objname corrupt-info || return 1
 
         esac
     done
@@ -667,12 +685,13 @@ function TEST_corrupt_scrub_replicated() {
             "flags": [
               "dirty",
               "omap",
-              "data_digest"
+              "data_digest",
+              "omap_digest"
             ],
             "truncate_seq": 0,
             "truncate_size": 0,
             "data_digest": "0x2ddbf8f5",
-            "omap_digest": "0xffffffff",
+            "omap_digest": "0xf5fba2c6",
             "expected_object_size": 0,
             "expected_write_size": 0,
             "alloc_hint_flags": 0,
@@ -711,12 +730,13 @@ function TEST_corrupt_scrub_replicated() {
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0xf5fba2c6",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -777,12 +797,13 @@ function TEST_corrupt_scrub_replicated() {
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0x067f306a",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -840,12 +861,13 @@ function TEST_corrupt_scrub_replicated() {
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0x6441854d",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -923,12 +945,13 @@ function TEST_corrupt_scrub_replicated() {
             "flags": [
               "dirty",
               "omap",
-              "data_digest"
+              "data_digest",
+              "omap_digest"
             ],
             "truncate_seq": 0,
             "truncate_size": 0,
             "data_digest": "0x2ddbf8f5",
-            "omap_digest": "0xffffffff",
+            "omap_digest": "0x2d2a4d6e",
             "expected_object_size": 0,
             "expected_write_size": 0,
             "alloc_hint_flags": 0,
@@ -972,12 +995,13 @@ function TEST_corrupt_scrub_replicated() {
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0x2d2a4d6e",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -1032,6 +1056,125 @@ function TEST_corrupt_scrub_replicated() {
       ]
     },
     {
+     "errors": [
+       "object_info_inconsistency"
+     ],
+     "object": {
+       "locator": "",
+       "name": "ROBJ18",
+       "nspace": "",
+       "snap": "head"
+     },
+     "selected_object_info": {
+       "alloc_hint_flags": 255,
+       "data_digest": "0x2ddbf8f5",
+       "expected_object_size": 0,
+       "expected_write_size": 0,
+       "flags": [
+         "dirty",
+         "omap",
+         "data_digest",
+         "omap_digest"
+       ],
+       "lost": 0,
+       "manifest": {
+         "type": 0
+       },
+       "oid": {
+         "hash": 1629828556,
+         "key": "",
+         "max": 0,
+         "namespace": "",
+         "oid": "ROBJ18",
+         "pool": 3,
+         "snapid": -2
+       },
+       "omap_digest": "0xddc3680f",
+       "size": 7,
+       "truncate_seq": 0,
+       "truncate_size": 0,
+       "user_version": 54,
+       "watchers": {}
+     },
+     "shards": [
+       {
+         "errors": [],
+         "object_info": {
+           "alloc_hint_flags": 0,
+           "data_digest": "0x2ddbf8f5",
+           "expected_object_size": 0,
+           "expected_write_size": 0,
+           "flags": [
+             "dirty",
+             "omap",
+             "data_digest",
+             "omap_digest"
+           ],
+           "lost": 0,
+           "manifest": {
+             "type": 0
+           },
+           "oid": {
+             "hash": 1629828556,
+             "key": "",
+             "max": 0,
+             "namespace": "",
+             "oid": "ROBJ18",
+             "pool": 3,
+             "snapid": -2
+           },
+           "omap_digest": "0xddc3680f",
+           "size": 7,
+           "truncate_seq": 0,
+           "truncate_size": 0,
+           "user_version": 54,
+           "watchers": {}
+         },
+         "osd": 0,
+         "primary": false,
+         "size": 7
+       },
+       {
+         "errors": [],
+         "object_info": {
+           "alloc_hint_flags": 255,
+           "data_digest": "0x2ddbf8f5",
+           "expected_object_size": 0,
+           "expected_write_size": 0,
+           "flags": [
+             "dirty",
+             "omap",
+             "data_digest",
+             "omap_digest"
+           ],
+           "lost": 0,
+           "manifest": {
+             "type": 0
+           },
+           "oid": {
+             "hash": 1629828556,
+             "key": "",
+             "max": 0,
+             "namespace": "",
+             "oid": "ROBJ18",
+             "pool": 3,
+             "snapid": -2
+           },
+           "omap_digest": "0xddc3680f",
+           "size": 7,
+           "truncate_seq": 0,
+           "truncate_size": 0,
+           "user_version": 54,
+           "watchers": {}
+         },
+         "osd": 1,
+         "primary": true,
+         "size": 7
+       }
+     ],
+     "union_shard_errors": []
+   },
+   {
       "shards": [
         {
           "size": 7,
@@ -1068,12 +1211,13 @@ function TEST_corrupt_scrub_replicated() {
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0x00b35dfd",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -1146,7 +1290,7 @@ function TEST_corrupt_scrub_replicated() {
         "version": "79'66",
         "prior_version": "79'65",
         "last_reqid": "client.4554.0:1",
-        "user_version": 66,
+        "user_version": 74,
         "size": 7,
         "mtime": "",
         "local_mtime": "",
@@ -1154,12 +1298,13 @@ function TEST_corrupt_scrub_replicated() {
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0xd6be81dc",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -1197,7 +1342,7 @@ function TEST_corrupt_scrub_replicated() {
             "version": "95'67",
             "prior_version": "51'64",
             "last_reqid": "client.4649.0:1",
-            "user_version": 67,
+            "user_version": 75,
             "size": 1,
             "mtime": "",
             "local_mtime": "",
@@ -1205,12 +1350,13 @@ function TEST_corrupt_scrub_replicated() {
             "flags": [
               "dirty",
               "omap",
-              "data_digest"
+              "data_digest",
+              "omap_digest"
             ],
             "truncate_seq": 0,
             "truncate_size": 0,
             "data_digest": "0x2b63260d",
-            "omap_digest": "0xffffffff",
+            "omap_digest": "0x2eecc539",
             "expected_object_size": 0,
             "expected_write_size": 0,
             "alloc_hint_flags": 0,
@@ -1246,12 +1392,13 @@ function TEST_corrupt_scrub_replicated() {
             "flags": [
               "dirty",
               "omap",
-              "data_digest"
+              "data_digest",
+              "omap_digest"
             ],
             "truncate_seq": 0,
             "truncate_size": 0,
             "data_digest": "0x2ddbf8f5",
-            "omap_digest": "0xffffffff",
+            "omap_digest": "0x2eecc539",
             "expected_object_size": 0,
             "expected_write_size": 0,
             "alloc_hint_flags": 0,
@@ -1281,7 +1428,7 @@ function TEST_corrupt_scrub_replicated() {
         "version": "95'67",
         "prior_version": "51'64",
         "last_reqid": "client.4649.0:1",
-        "user_version": 67,
+        "user_version": 75,
         "size": 1,
         "mtime": "",
         "local_mtime": "",
@@ -1289,12 +1436,13 @@ function TEST_corrupt_scrub_replicated() {
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2b63260d",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0x2eecc539",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -1323,7 +1471,7 @@ function TEST_corrupt_scrub_replicated() {
 EOF
 
     jq "$jqfilter" $dir/json | jq '.inconsistents' | python -c "$sortkeys" > $dir/csjson
-    diff ${DIFFCOLOPTS} $dir/checkcsjson $dir/csjson || test $getjson = "yes" || return 1
+    multidiff $dir/checkcsjson $dir/csjson || test $getjson = "yes" || return 1
     if test $getjson = "yes"
     then
         jq '.' $dir/json > save1.json
@@ -1400,12 +1548,13 @@ EOF
             "flags": [
               "dirty",
               "omap",
-              "data_digest"
+              "data_digest",
+              "omap_digest"
             ],
             "truncate_seq": 0,
             "truncate_size": 0,
             "data_digest": "0x2ddbf8f5",
-            "omap_digest": "0xffffffff",
+            "omap_digest": "0xf5fba2c6",
             "expected_object_size": 0,
             "expected_write_size": 0,
             "alloc_hint_flags": 0,
@@ -1447,12 +1596,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0xf5fba2c6",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -1476,6 +1626,72 @@ EOF
         "locator": "",
         "nspace": "",
         "name": "ROBJ1"
+      }
+    },
+    {
+      "shards": [
+        {
+          "data_digest": "0x2ddbf8f5",
+          "omap_digest": "0xa8dd5adc",
+          "size": 7,
+          "errors": [
+            "omap_digest_mismatch_info"
+          ],
+          "osd": 0,
+          "primary": false
+        },
+        {
+          "data_digest": "0x2ddbf8f5",
+          "omap_digest": "0xa8dd5adc",
+          "size": 7,
+          "errors": [
+            "omap_digest_mismatch_info"
+          ],
+          "osd": 1,
+          "primary": true
+        }
+      ],
+      "selected_object_info": {
+        "alloc_hint_flags": 0,
+        "data_digest": "0x2ddbf8f5",
+        "expected_object_size": 0,
+        "expected_write_size": 0,
+        "flags": [
+          "dirty",
+          "omap",
+          "data_digest",
+          "omap_digest"
+        ],
+        "lost": 0,
+        "manifest": {
+          "type": 0
+        },
+        "oid": {
+          "hash": 3174666125,
+          "key": "",
+          "max": 0,
+          "namespace": "",
+          "oid": "ROBJ10",
+          "pool": 3,
+          "snapid": -2
+        },
+        "omap_digest": "0xc2025a24",
+        "size": 7,
+        "truncate_seq": 0,
+        "truncate_size": 0,
+        "user_version": 30,
+        "watchers": {}
+      },
+      "union_shard_errors": [
+        "omap_digest_mismatch_info"
+      ],
+      "errors": [],
+      "object": {
+        "version": 30,
+        "snap": "head",
+        "locator": "",
+        "nspace": "",
+        "name": "ROBJ10"
       }
     },
     {
@@ -1518,12 +1734,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0xa03cef03",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -1583,12 +1800,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0x067f306a",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -1701,12 +1919,13 @@ EOF
             "flags": [
               "dirty",
               "omap",
-              "data_digest"
+              "data_digest",
+              "omap_digest"
             ],
             "truncate_seq": 0,
             "truncate_size": 0,
             "data_digest": "0x2ddbf8f5",
-            "omap_digest": "0xffffffff",
+            "omap_digest": "0x2d2a4d6e",
             "expected_object_size": 0,
             "expected_write_size": 0,
             "alloc_hint_flags": 0,
@@ -1754,12 +1973,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0x2d2a4d6e",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -1818,7 +2038,201 @@ EOF
       ]
     },
     {
-      "shards": [
+     "errors": [],
+     "object": {
+       "locator": "",
+       "name": "ROBJ17",
+       "nspace": "",
+       "snap": "head"
+     },
+     "selected_object_info": {
+       "alloc_hint_flags": 0,
+       "data_digest": "0x2ddbf8f5",
+       "expected_object_size": 0,
+       "expected_write_size": 0,
+       "flags": [
+         "dirty",
+         "omap",
+         "data_digest",
+         "omap_digest"
+       ],
+       "lost": 0,
+       "manifest": {
+         "type": 0
+       },
+       "oid": {
+         "hash": 1884071249,
+         "key": "",
+         "max": 0,
+         "namespace": "",
+         "oid": "ROBJ17",
+         "pool": 3,
+         "snapid": -2
+       },
+       "omap_digest": "0xe9572720",
+       "size": 7,
+       "truncate_seq": 0,
+       "truncate_size": 0,
+       "user_version": 51,
+       "watchers": {}
+     },
+     "shards": [
+       {
+         "data_digest": "0x5af0c3ef",
+         "errors": [
+           "data_digest_mismatch_info"
+         ],
+         "omap_digest": "0xe9572720",
+         "osd": 0,
+         "primary": false,
+         "size": 7
+       },
+       {
+         "data_digest": "0x5af0c3ef",
+         "errors": [
+           "data_digest_mismatch_info"
+         ],
+         "omap_digest": "0xe9572720",
+         "osd": 1,
+         "primary": true,
+         "size": 7
+       }
+     ],
+     "union_shard_errors": [
+       "data_digest_mismatch_info"
+     ]
+   },
+   {
+     "errors": [
+       "object_info_inconsistency"
+     ],
+     "object": {
+       "locator": "",
+       "name": "ROBJ18",
+       "nspace": "",
+       "snap": "head"
+     },
+     "selected_object_info": {
+       "alloc_hint_flags": 255,
+       "data_digest": "0x2ddbf8f5",
+       "expected_object_size": 0,
+       "expected_write_size": 0,
+       "flags": [
+         "dirty",
+         "omap",
+         "data_digest",
+         "omap_digest"
+       ],
+       "lost": 0,
+       "manifest": {
+         "type": 0
+       },
+       "oid": {
+         "hash": 1629828556,
+         "key": "",
+         "max": 0,
+         "namespace": "",
+         "oid": "ROBJ18",
+         "pool": 3,
+         "snapid": -2
+       },
+       "omap_digest": "0xddc3680f",
+       "size": 7,
+       "truncate_seq": 0,
+       "truncate_size": 0,
+       "user_version": 54,
+       "watchers": {}
+     },
+     "shards": [
+       {
+         "data_digest": "0xbd89c912",
+         "errors": [
+           "data_digest_mismatch_info"
+         ],
+         "object_info": {
+           "alloc_hint_flags": 0,
+           "data_digest": "0x2ddbf8f5",
+           "expected_object_size": 0,
+           "expected_write_size": 0,
+           "flags": [
+             "dirty",
+             "omap",
+             "data_digest",
+             "omap_digest"
+           ],
+           "lost": 0,
+           "manifest": {
+             "type": 0
+           },
+           "oid": {
+             "hash": 1629828556,
+             "key": "",
+             "max": 0,
+             "namespace": "",
+             "oid": "ROBJ18",
+             "pool": 3,
+             "snapid": -2
+           },
+           "omap_digest": "0xddc3680f",
+           "size": 7,
+           "truncate_seq": 0,
+           "truncate_size": 0,
+           "user_version": 54,
+           "watchers": {}
+         },
+         "omap_digest": "0xddc3680f",
+         "osd": 0,
+         "primary": false,
+         "size": 7
+       },
+       {
+         "data_digest": "0xbd89c912",
+         "errors": [
+           "data_digest_mismatch_info"
+         ],
+         "object_info": {
+           "alloc_hint_flags": 255,
+           "data_digest": "0x2ddbf8f5",
+           "expected_object_size": 0,
+           "expected_write_size": 0,
+           "flags": [
+             "dirty",
+             "omap",
+             "data_digest",
+             "omap_digest"
+           ],
+           "lost": 0,
+           "manifest": {
+             "type": 0
+           },
+           "oid": {
+             "hash": 1629828556,
+             "key": "",
+             "max": 0,
+             "namespace": "",
+             "oid": "ROBJ18",
+             "pool": 3,
+             "snapid": -2
+           },
+           "omap_digest": "0xddc3680f",
+           "size": 7,
+           "truncate_seq": 0,
+           "truncate_size": 0,
+           "user_version": 54,
+           "watchers": {}
+         },
+         "omap_digest": "0xddc3680f",
+         "osd": 1,
+         "primary": true,
+         "size": 7
+       }
+     ],
+     "union_shard_errors": [
+       "data_digest_mismatch_info"
+     ]
+   },
+   {
+     "shards": [
         {
           "data_digest": "0x578a4830",
           "omap_digest": "0xf8e11918",
@@ -1859,12 +2273,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0xf8e11918",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -1926,12 +2341,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0x00b35dfd",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -1958,7 +2374,9 @@ EOF
           "data_digest": "0x2ddbf8f5",
           "omap_digest": "0xd7178dfe",
           "size": 7,
-          "errors": [],
+          "errors": [
+            "omap_digest_mismatch_info"
+          ],
           "osd": 0,
           "primary": false
         },
@@ -1992,12 +2410,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0xe2d46ea4",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -2006,7 +2425,9 @@ EOF
         },
         "watchers": {}
       },
-      "union_shard_errors": [],
+      "union_shard_errors": [
+        "omap_digest_mismatch_info"
+      ],
       "errors": [
         "omap_digest_mismatch"
       ],
@@ -2032,7 +2453,9 @@ EOF
           "data_digest": "0x2ddbf8f5",
           "omap_digest": "0x06cac8f6",
           "size": 7,
-          "errors": [],
+          "errors": [
+            "omap_digest_mismatch_info"
+          ],
           "osd": 1,
           "primary": true
         }
@@ -2058,12 +2481,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0x1a862a41",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -2072,7 +2496,9 @@ EOF
         },
         "watchers": {}
       },
-      "union_shard_errors": [],
+      "union_shard_errors": [
+        "omap_digest_mismatch_info"
+      ],
       "errors": [
         "omap_digest_mismatch"
       ],
@@ -2090,7 +2516,9 @@ EOF
           "data_digest": "0x2ddbf8f5",
           "omap_digest": "0x689ee887",
           "size": 7,
-          "errors": [],
+          "errors": [
+            "omap_digest_mismatch_info"
+          ],
           "osd": 0,
           "primary": false
         },
@@ -2124,12 +2552,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0x179c919f",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -2138,7 +2567,9 @@ EOF
         },
         "watchers": {}
       },
-      "union_shard_errors": [],
+      "union_shard_errors": [
+        "omap_digest_mismatch_info"
+      ],
       "errors": [
         "omap_digest_mismatch"
       ],
@@ -2164,7 +2595,9 @@ EOF
           "data_digest": "0x2ddbf8f5",
           "omap_digest": "0x6a73cc07",
           "size": 7,
-          "errors": [],
+          "errors": [
+            "omap_digest_mismatch_info"
+          ],
           "osd": 1,
           "primary": true
         }
@@ -2190,12 +2623,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0xefced57a",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -2204,7 +2638,9 @@ EOF
         },
         "watchers": {}
       },
-      "union_shard_errors": [],
+      "union_shard_errors": [
+        "omap_digest_mismatch_info"
+      ],
       "errors": [
         "omap_digest_mismatch"
       ],
@@ -2272,7 +2708,7 @@ EOF
         "version": "79'66",
         "prior_version": "79'65",
         "last_reqid": "client.4554.0:1",
-        "user_version": 66,
+        "user_version": 74,
         "size": 7,
         "mtime": "2018-04-05 14:34:05.598688",
         "local_mtime": "2018-04-05 14:34:05.599698",
@@ -2280,12 +2716,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x2ddbf8f5",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0xd6be81dc",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -2331,12 +2768,13 @@ EOF
             "flags": [
               "dirty",
               "omap",
-              "data_digest"
+              "data_digest",
+              "omap_digest"
             ],
             "truncate_seq": 0,
             "truncate_size": 0,
             "data_digest": "0x2ddbf8f5",
-            "omap_digest": "0xffffffff",
+            "omap_digest": "0x2eecc539",
             "expected_object_size": 0,
             "expected_write_size": 0,
             "alloc_hint_flags": 0,
@@ -2368,7 +2806,7 @@ EOF
             "version": "119'68",
             "prior_version": "51'64",
             "last_reqid": "client.4834.0:1",
-            "user_version": 68,
+            "user_version": 76,
             "size": 3,
             "mtime": "2018-04-05 14:35:01.500659",
             "local_mtime": "2018-04-05 14:35:01.502117",
@@ -2376,12 +2814,13 @@ EOF
             "flags": [
               "dirty",
               "omap",
-              "data_digest"
+              "data_digest",
+              "omap_digest"
             ],
             "truncate_seq": 0,
             "truncate_size": 0,
             "data_digest": "0x1f26fb26",
-            "omap_digest": "0xffffffff",
+            "omap_digest": "0x2eecc539",
             "expected_object_size": 0,
             "expected_write_size": 0,
             "alloc_hint_flags": 0,
@@ -2411,7 +2850,7 @@ EOF
         "version": "119'68",
         "prior_version": "51'64",
         "last_reqid": "client.4834.0:1",
-        "user_version": 68,
+        "user_version": 76,
         "size": 3,
         "mtime": "2018-04-05 14:35:01.500659",
         "local_mtime": "2018-04-05 14:35:01.502117",
@@ -2419,12 +2858,13 @@ EOF
         "flags": [
           "dirty",
           "omap",
-          "data_digest"
+          "data_digest",
+          "omap_digest"
         ],
         "truncate_seq": 0,
         "truncate_size": 0,
         "data_digest": "0x1f26fb26",
-        "omap_digest": "0xffffffff",
+        "omap_digest": "0x2eecc539",
         "expected_object_size": 0,
         "expected_write_size": 0,
         "alloc_hint_flags": 0,
@@ -2453,7 +2893,7 @@ EOF
 EOF
 
     jq "$jqfilter" $dir/json | jq '.inconsistents' | python -c "$sortkeys" > $dir/csjson
-    diff ${DIFFCOLOPTS} $dir/checkcsjson $dir/csjson || test $getjson = "yes" || return 1
+    multidiff $dir/checkcsjson $dir/csjson || test $getjson = "yes" || return 1
     if test $getjson = "yes"
     then
         jq '.' $dir/json > save2.json
@@ -2463,6 +2903,18 @@ EOF
     then
       jsonschema -i $dir/json $CEPH_ROOT/doc/rados/command/list-inconsistent-obj.json || return 1
     fi
+
+    repair $pg
+    wait_for_clean
+
+    # This hangs if the repair doesn't work
+    timeout 30 rados -p $poolname get ROBJ17 $dir/robj17.out || return 1
+    timeout 30 rados -p $poolname get ROBJ18 $dir/robj18.out || return 1
+    # Even though we couldn't repair all of the introduced errors, we can fix ROBJ17
+    diff -q $dir/new.ROBJ17 $dir/robj17.out || return 1
+    rm -f $dir/new.ROBJ17 $dir/robj17.out || return 1
+    diff -q $dir/new.ROBJ18 $dir/robj18.out || return 1
+    rm -f $dir/new.ROBJ18 $dir/robj18.out || return 1
 
     rados rmpool $poolname $poolname --yes-i-really-really-mean-it
     teardown $dir || return 1
@@ -3193,7 +3645,7 @@ function corrupt_scrub_erasure() {
 EOF
 
     jq "$jqfilter" $dir/json | jq '.inconsistents' | python -c "$sortkeys" > $dir/csjson
-    diff ${DIFFCOLOPTS} $dir/checkcsjson $dir/csjson || test $getjson = "yes" || return 1
+    multidiff $dir/checkcsjson $dir/csjson || test $getjson = "yes" || return 1
     if test $getjson = "yes"
     then
         jq '.' $dir/json > save3.json
@@ -4607,7 +5059,7 @@ EOF
     fi
 
     jq "$jqfilter" $dir/json | jq '.inconsistents' | python -c "$sortkeys" > $dir/csjson
-    diff ${DIFFCOLOPTS} $dir/checkcsjson $dir/csjson || test $getjson = "yes" || return 1
+    multidiff $dir/checkcsjson $dir/csjson || test $getjson = "yes" || return 1
     if test $getjson = "yes"
     then
       if [ "$allow_overwrites" = "true" ]
@@ -4973,7 +5425,7 @@ function TEST_corrupt_snapset_scrub_rep() {
 EOF
 
     jq "$jqfilter" $dir/json | jq '.inconsistents' | python -c "$sortkeys" > $dir/csjson
-    diff ${DIFFCOLOPTS} $dir/checkcsjson $dir/csjson || test $getjson = "yes" || return 1
+    multidiff $dir/checkcsjson $dir/csjson || test $getjson = "yes" || return 1
     if test $getjson = "yes"
     then
         jq '.' $dir/json > save6.json
@@ -4991,6 +5443,6 @@ EOF
 main osd-scrub-repair "$@"
 
 # Local Variables:
-# compile-command: "cd ../.. ; make -j4 && \
-#    test/osd/osd-scrub-repair.sh # TEST_corrupt_and_repair_replicated"
+# compile-command: "cd build ; make -j4 && \
+#    ../qa/run-standalone.sh osd-scrub-repair.sh"
 # End:

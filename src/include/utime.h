@@ -71,10 +71,12 @@ public:
     tv.tv_sec = v.tv_sec;
     tv.tv_nsec = v.tv_nsec;
   }
-  explicit utime_t(const ceph::real_time& rt) {
-    ceph_timespec ts = real_clock::to_ceph_timespec(rt);
-    decode_timeval(&ts);
-  }
+  // conversion from ceph::real_time/coarse_real_time
+  template <typename Clock, typename std::enable_if_t<
+            ceph::converts_to_timespec_v<Clock>>* = nullptr>
+  explicit utime_t(const std::chrono::time_point<Clock>& t)
+    : utime_t(Clock::to_timespec(t)) {} // forward to timespec ctor
+
   utime_t(const struct timeval &v) {
     set_from_timeval(&v);
   }
@@ -137,7 +139,7 @@ public:
     encode(tv.tv_nsec, bl);
 #endif
   }
-  void decode(bufferlist::iterator &p) {
+  void decode(bufferlist::const_iterator &p) {
 #if defined(CEPH_LITTLE_ENDIAN)
     p.copy(sizeof(__u32) + sizeof(__u32), (char *)(this));
 #else
@@ -432,6 +434,16 @@ public:
     }
 
     return 0;
+  }
+
+  bool parse(const string& s) {
+    uint64_t epoch, nsec;
+    int r = parse_date(s, &epoch, &nsec);
+    if (r < 0) {
+      return false;
+    }
+    *this = utime_t(epoch, nsec);
+    return true;
   }
 };
 WRITE_CLASS_ENCODER(utime_t)

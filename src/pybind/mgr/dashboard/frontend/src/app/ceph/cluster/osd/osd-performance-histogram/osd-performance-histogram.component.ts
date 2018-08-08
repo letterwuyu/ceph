@@ -12,7 +12,7 @@ export class OsdPerformanceHistogramComponent implements OnChanges {
   valuesStyle: any;
   last = {};
 
-  constructor() { }
+  constructor() {}
 
   ngOnChanges() {
     this.render();
@@ -31,7 +31,6 @@ export class OsdPerformanceHistogramComponent implements OnChanges {
     if (!this.histogram) {
       return;
     }
-    let sum = 0;
     let max = 0;
 
     _.each(this.histogram.values, (row, i) => {
@@ -42,7 +41,6 @@ export class OsdPerformanceHistogramComponent implements OnChanges {
         } else {
           val = col;
         }
-        sum += val;
         max = Math.max(max, val);
       });
     });
@@ -52,7 +50,7 @@ export class OsdPerformanceHistogramComponent implements OnChanges {
         const val = this.last && this.last[i] && this.last[i][j] ? col - this.last[i][j] : col;
         const g = max ? val / max : 0;
         const r = 1 - g;
-        return {backgroundColor: this.hexcolor(r, g, 0)};
+        return { backgroundColor: this.hexcolor(r, g, 0) };
       });
     });
 

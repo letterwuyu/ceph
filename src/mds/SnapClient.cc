@@ -46,7 +46,7 @@ void SnapClient::handle_query_result(MMDSTableRequest *m)
 
   char type;
   using ceph::decode;
-  bufferlist::iterator p = m->bl.begin();
+  auto p = m->bl.cbegin();
   decode(type, p);
 
   switch (type) {
@@ -97,13 +97,14 @@ void SnapClient::handle_query_result(MMDSTableRequest *m)
     synced = true;
 
   if (synced && !waiting_for_version.empty()) {
-    std::list<MDSInternalContextBase*> finished;
-    for (auto p = waiting_for_version.begin();
-	p != waiting_for_version.end(); ) {
-      if (p->first > cached_version)
+    MDSInternalContextBase::vec finished;
+    while (!waiting_for_version.empty()) {
+      auto it = waiting_for_version.begin();
+      if (it->first > cached_version)
 	break;
-      finished.splice(finished.end(), p->second);
-      waiting_for_version.erase(p++);
+      auto& v = it->second;
+      finished.insert(finished.end(), v.begin(), v.end());
+      waiting_for_version.erase(it);
     }
     if (!finished.empty())
       mds->queue_waiters(finished);

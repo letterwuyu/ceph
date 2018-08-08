@@ -87,7 +87,7 @@ class MDSCommandOp : public CommandOp
   public:
   mds_gid_t     mds_gid;
 
-  MDSCommandOp(ceph_tid_t t) : CommandOp(t) {}
+  explicit MDSCommandOp(ceph_tid_t t) : CommandOp(t) {}
 };
 
 /* error code for ceph_fuse */
@@ -204,7 +204,7 @@ struct dir_result_t {
     int64_t offset;
     string name;
     InodeRef inode;
-    dentry(int64_t o) : offset(o) {}
+    explicit dentry(int64_t o) : offset(o) {}
     dentry(int64_t o, const string& n, const InodeRef& in) :
       offset(o), name(n), inode(in) {}
   };
@@ -381,16 +381,16 @@ protected:
   void handle_client_reply(MClientReply *reply);
   bool is_dir_operation(MetaRequest *request);
 
-  bool   initialized;
-  bool   mounted;
-  bool   unmounting;
-  bool   blacklisted;
+  bool   initialized = false;
+  bool   mounted = false;
+  bool   unmounting = false;
+  bool   blacklisted = false;
 
   // When an MDS has sent us a REJECT, remember that and don't
   // contact it again.  Remember which inst rejected us, so that
   // when we talk to another inst with the same rank we can
   // try again.
-  std::map<mds_rank_t, entity_inst_t> rejected_by_mds;
+  std::map<mds_rank_t, entity_addrvec_t> rejected_by_mds;
 
   int local_osd;
   epoch_t local_osd_epoch;
@@ -492,8 +492,9 @@ protected:
   void put_inode(Inode *in, int n=1);
   void close_dir(Dir *dir);
 
+  void _abort_mds_sessions(int err);
   // same as unmount() but for when the client_lock is already held
-  void _unmount();
+  void _unmount(bool abort);
 
   friend class C_Client_FlushComplete; // calls put_inode()
   friend class C_Client_CacheInvalidate;  // calls ino_invalidate_cb
@@ -711,10 +712,11 @@ protected:
   void clear_dir_complete_and_ordered(Inode *diri, bool complete);
   void insert_readdir_results(MetaRequest *request, MetaSession *session, Inode *diri);
   Inode* insert_trace(MetaRequest *request, MetaSession *session);
-  void update_inode_file_bits(Inode *in, uint64_t truncate_seq, uint64_t truncate_size, uint64_t size,
-			      uint64_t change_attr, uint64_t time_warp_seq, utime_t ctime,
-			      utime_t mtime, utime_t atime, version_t inline_version,
-			      bufferlist& inline_data, int issued);
+  void update_inode_file_size(Inode *in, int issued, uint64_t size,
+			      uint64_t truncate_seq, uint64_t truncate_size);
+  void update_inode_file_time(Inode *in, int issued, uint64_t time_warp_seq,
+			      utime_t ctime, utime_t mtime, utime_t atime);
+
   Inode *add_update_inode(InodeStat *st, utime_t ttl, MetaSession *session,
 			  const UserPerm& request_perms);
   Dentry *insert_dentry_inode(Dir *dir, const string& dname, LeaseStat *dlease, 
@@ -846,6 +848,7 @@ private:
   int _getlk(Fh *fh, struct flock *fl, uint64_t owner);
   int _setlk(Fh *fh, struct flock *fl, uint64_t owner, int sleep);
   int _flock(Fh *fh, int cmd, uint64_t owner);
+  int _lazyio(Fh *fh, int enable);
 
   int get_or_create(Inode *dir, const char* name,
 		    Dentry **pdn, bool expect_null=false);
@@ -874,7 +877,6 @@ private:
   int _getattr_for_perm(Inode *in, const UserPerm& perms);
 
   vinodeno_t _get_vino(Inode *in);
-  inodeno_t _get_inodeno(Inode *in);
 
   /*
    * These define virtual xattrs exposing the recursive directory
@@ -885,7 +887,7 @@ private:
 	  size_t (Client::*getxattr_cb)(Inode *in, char *val, size_t size);
 	  bool readonly, hidden;
 	  bool (Client::*exists_cb)(Inode *in);
-	  int flags;
+	  unsigned int flags;
   };
 
 /* Flags for VXattr */
@@ -953,6 +955,7 @@ public:
   int mount(const std::string &mount_root, const UserPerm& perms,
 	    bool require_mds=false);
   void unmount();
+  void abort_conn();
 
   int mds_command(
     const std::string &mds_spec,
@@ -1048,6 +1051,11 @@ public:
 	     const UserPerm& perms);
   int utime(const char *path, struct utimbuf *buf, const UserPerm& perms);
   int lutime(const char *path, struct utimbuf *buf, const UserPerm& perms);
+  int futime(int fd, struct utimbuf *buf, const UserPerm& perms);
+  int utimes(const char *relpath, struct timeval times[2], const UserPerm& perms);
+  int lutimes(const char *relpath, struct timeval times[2], const UserPerm& perms);
+  int futimes(int fd, struct timeval times[2], const UserPerm& perms);
+  int futimens(int fd, struct timespec times[2], const UserPerm& perms);
   int flock(int fd, int operation, uint64_t owner);
   int truncate(const char *path, loff_t size, const UserPerm& perms);
 
@@ -1101,6 +1109,7 @@ public:
   int64_t drop_caches();
 
   // hpc lazyio
+  int lazyio(int fd, int enable);
   int lazyio_propogate(int fd, loff_t offset, size_t count);
   int lazyio_synchronize(int fd, loff_t offset, size_t count);
 
@@ -1135,11 +1144,6 @@ public:
   int get_caps_issued(int fd);
   int get_caps_issued(const char *path, const UserPerm& perms);
 
-  // low-level interface v2
-  inodeno_t ll_get_inodeno(Inode *in) {
-    Mutex::Locker lock(client_lock);
-    return _get_inodeno(in);
-  }
   snapid_t ll_get_snapid(Inode *in);
   vinodeno_t ll_get_vino(Inode *in) {
     Mutex::Locker lock(client_lock);
@@ -1232,11 +1236,12 @@ public:
   int ll_flush(Fh *fh);
   int ll_fsync(Fh *fh, bool syncdataonly);
   int ll_sync_inode(Inode *in, bool syncdataonly);
-  int ll_fallocate(Fh *fh, int mode, loff_t offset, loff_t length);
+  int ll_fallocate(Fh *fh, int mode, int64_t offset, int64_t length);
   int ll_release(Fh *fh);
   int ll_getlk(Fh *fh, struct flock *fl, uint64_t owner);
   int ll_setlk(Fh *fh, struct flock *fl, uint64_t owner, int sleep);
   int ll_flock(Fh *fh, int cmd, uint64_t owner);
+  int ll_lazyio(Fh *fh, int enable);
   int ll_file_layout(Fh *fh, file_layout_t *layout);
   void ll_interrupt(void *d);
   bool ll_handle_umask() {
@@ -1255,7 +1260,7 @@ public:
   int test_dentry_handling(bool can_invalidate);
 
   const char** get_tracked_conf_keys() const override;
-  void handle_conf_change(const struct md_config_t *conf,
+  void handle_conf_change(const ConfigProxy& conf,
 	                          const std::set <std::string> &changed) override;
   uint32_t get_deleg_timeout() { return deleg_timeout; }
   int set_deleg_timeout(uint32_t timeout);

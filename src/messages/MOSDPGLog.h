@@ -60,20 +60,13 @@ public:
       true,
       new PGCreateInfo(
 	get_spg(),
-	epoch,
+	query_epoch,
 	info.history,
 	past_intervals,
 	false));
   }
 
   MOSDPGLog() : MOSDPeeringOp(MSG_OSD_PG_LOG, HEAD_VERSION, COMPAT_VERSION) {
-    set_priority(CEPH_MSG_PRIO_HIGH); 
-  }
-  MOSDPGLog(shard_id_t to, shard_id_t from, version_t mv, pg_info_t& i)
-    : MOSDPeeringOp(MSG_OSD_PG_LOG, HEAD_VERSION, COMPAT_VERSION),
-      epoch(mv), query_epoch(mv),
-      to(to), from(from),
-      info(i)  {
     set_priority(CEPH_MSG_PRIO_HIGH); 
   }
   MOSDPGLog(shard_id_t to, shard_id_t from,
@@ -103,13 +96,18 @@ public:
     encode(info, payload);
     encode(log, payload);
     encode(missing, payload);
-    encode(query_epoch, payload);
+    if (!HAVE_FEATURE(features, SERVER_NAUTILUS)) {
+      // pre-nautilus OSDs do not set last_peering_reset properly
+      encode(epoch, payload);
+    } else {
+      encode(query_epoch, payload);
+    }
     encode(past_intervals, payload);
     encode(to, payload);
     encode(from, payload);
   }
   void decode_payload() override {
-    bufferlist::iterator p = payload.begin();
+    auto p = payload.cbegin();
     decode(epoch, p);
     decode(info, p);
     log.decode(p, info.pgid.pool());

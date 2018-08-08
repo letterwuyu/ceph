@@ -905,12 +905,17 @@ public:
             call(new RGWReadRESTResourceCR<meta_list_result >(cct, conn, sync_env->http_manager,
                                                               entrypoint, pairs, &result));
           }
-          if (get_ret_status() < 0) {
+          ret_status = get_ret_status();
+          if (ret_status == -ENOENT) {
+            set_retcode(0); /* reset coroutine status so that we don't return it */
+            ret_status = 0;
+          }
+          if (ret_status < 0) {
             tn->log(0, SSTR("ERROR: failed to fetch metadata section: " << *sections_iter));
             yield entries_index->finish();
             yield lease_cr->go_down();
             drain_all();
-            return set_cr_error(get_ret_status());
+            return set_cr_error(ret_status);
           }
           iter = result.keys.begin();
           for (; iter != result.keys.end(); ++iter) {
@@ -1211,7 +1216,7 @@ public:
                                                            sync_marker);
   }
 
-  RGWOrderCallCR *allocate_order_control_cr() {
+  RGWOrderCallCR *allocate_order_control_cr() override {
     return new RGWLastCallerWinsCR(sync_env->cct);
   }
 };
@@ -2366,7 +2371,7 @@ int RGWCloneMetaLogCoroutine::state_send_rest_request()
     log_error() << "failed to send http operation: " << http_op->to_str() << " ret=" << ret << std::endl;
     http_op->put();
     http_op = NULL;
-    return ret;
+    return set_cr_error(ret);
   }
 
   return io_block(0);
@@ -2491,7 +2496,7 @@ class PurgePeriodLogsCR : public RGWCoroutine {
       realm_epoch(realm_epoch), last_trim_epoch(last_trim)
   {}
 
-  int operate();
+  int operate() override;
 };
 
 int PurgePeriodLogsCR::operate()
@@ -2735,7 +2740,7 @@ class MetaMasterStatusCollectCR : public RGWShardCollectCR {
   connection_map::iterator c;
   std::vector<rgw_meta_sync_status>::iterator s;
  public:
-  MetaMasterStatusCollectCR(MasterTrimEnv& env)
+  explicit MetaMasterStatusCollectCR(MasterTrimEnv& env)
     : RGWShardCollectCR(env.store->ctx(), MAX_CONCURRENT_SHARDS),
       env(env), c(env.connections.begin()), s(env.peer_status.begin())
   {}
@@ -2767,11 +2772,11 @@ class MetaMasterTrimCR : public RGWCoroutine {
   int ret{0};
 
  public:
-  MetaMasterTrimCR(MasterTrimEnv& env)
+  explicit MetaMasterTrimCR(MasterTrimEnv& env)
     : RGWCoroutine(env.store->ctx()), env(env)
   {}
 
-  int operate();
+  int operate() override;
 };
 
 int MetaMasterTrimCR::operate()
@@ -2971,9 +2976,9 @@ class MetaPeerTrimCR : public RGWCoroutine {
   rgw_mdlog_info mdlog_info; //< master's mdlog info
 
  public:
-  MetaPeerTrimCR(PeerTrimEnv& env) : RGWCoroutine(env.store->ctx()), env(env) {}
+  explicit MetaPeerTrimCR(PeerTrimEnv& env) : RGWCoroutine(env.store->ctx()), env(env) {}
 
-  int operate();
+  int operate() override;
 };
 
 int MetaPeerTrimCR::operate()
@@ -3039,7 +3044,7 @@ class MetaTrimPollCR : public RGWCoroutine {
       cookie(RGWSimpleRadosLockCR::gen_random_cookie(cct))
   {}
 
-  int operate();
+  int operate() override;
 };
 
 int MetaTrimPollCR::operate()

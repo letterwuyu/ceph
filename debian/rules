@@ -4,8 +4,15 @@ export DH_VERBOSE=1
 export DESTDIR=$(CURDIR)/debian/tmp
 
 export DEB_HOST_ARCH      ?= $(shell dpkg-architecture -qDEB_HOST_ARCH)
+ifneq (,$(findstring WITH_STATIC_LIBSTDCXX,$(CEPH_EXTRA_CMAKE_ARGS)))
+  # dh_auto_build sets LDFLAGS with `dpkg-buildflags --get LDFLAGS` on ubuntu,
+  # which makes the application aborts when the shared library throws
+  # exception, so strip this linker option,
+  # see http://tracker.ceph.com/issues/25209
+  export DEB_LDFLAGS_MAINT_STRIP = -Wl,-Bsymbolic-functions
+endif
 
-extraopts += -DUSE_CRYPTOPP=OFF -DWITH_OCF=ON -DWITH_LTTNG=ON -DWITH_PYTHON3=ON -DWITH_EMBEDDED=OFF -DWITH_MGR_DASHBOARD_FRONTEND=OFF
+extraopts += -DWITH_OCF=ON -DWITH_LTTNG=ON -DWITH_PYTHON3=ON -DWITH_MGR_DASHBOARD_FRONTEND=OFF
 extraopts += -DWITH_CEPHFS_JAVA=ON
 extraopts += -DWITH_SYSTEMD=ON -DCEPH_SYSTEMD_ENV_DIR=/etc/default
 # assumes that ceph is exmpt from multiarch support, so we override the libdir.
@@ -43,10 +50,9 @@ override_dh_auto_clean:
 override_dh_auto_install:
 	dh_auto_install --buildsystem=cmake --destdir=$(DESTDIR)
 	install -D -m 644 udev/50-rbd.rules $(DESTDIR)/lib/udev/rules.d/50-rbd.rules
-	install -D -m 644 udev/95-ceph-osd.rules $(DESTDIR)/lib/udev/rules.d/95-ceph-osd.rules
-	install -D -m 644 udev/60-ceph-by-parttypeuuid.rules $(DESTDIR)/lib/udev/rules.d/60-ceph-by-parttypeuuid.rules
 	install -D -m 644 src/etc-rbdmap $(DESTDIR)/etc/ceph/rbdmap
 	install -D -m 644 etc/sysctl/90-ceph-osd.conf $(DESTDIR)/etc/sysctl.d/30-ceph-osd.conf
+	install -D -m 600 sudoers.d/ceph-osd-smartctl $(DESTDIR)/etc/sudoers.d/ceph-osd-smartctl
 
 # doc/changelog is a directory, which confuses dh_installchangelogs
 override_dh_installchangelogs:
@@ -65,7 +71,6 @@ override_dh_installinit:
 	install -m0644 src/upstart/ceph-all.conf debian/ceph-base/etc/init
 	install -d -m0755 debian/ceph-osd/etc/init
 	install -m0644 src/upstart/ceph-osd*.conf debian/ceph-osd/etc/init
-	install -m0644 src/upstart/ceph-disk.conf debian/ceph-osd/etc/init
 	install -d -m0755 debian/ceph-mon/etc/init
 	install -m0644 src/upstart/ceph-mon*.conf debian/ceph-mon/etc/init
 	install -d -m0755 debian/ceph-common/etc/init

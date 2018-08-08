@@ -1,15 +1,18 @@
 import { HttpClientTestingModule } from '@angular/common/http/testing';
-import { async, ComponentFixture, fakeAsync, TestBed, tick } from '@angular/core/testing';
+import { ComponentFixture, fakeAsync, TestBed, tick } from '@angular/core/testing';
 import { RouterTestingModule } from '@angular/router/testing';
 
 import { ToastModule } from 'ng2-toastr';
 import { BsModalRef, ModalModule } from 'ngx-bootstrap';
-import { Observable } from 'rxjs/Observable';
+import { throwError as observableThrowError } from 'rxjs';
 
+import { configureTestBed } from '../../../../testing/unit-test-helper';
 import { ApiModule } from '../../../shared/api/api.module';
 import { RbdService } from '../../../shared/api/rbd.service';
 import { ComponentsModule } from '../../../shared/components/components.module';
 import { DataTableModule } from '../../../shared/datatable/datatable.module';
+import { Permissions } from '../../../shared/models/permissions';
+import { PipesModule } from '../../../shared/pipes/pipes.module';
 import { AuthStorageService } from '../../../shared/services/auth-storage.service';
 import { NotificationService } from '../../../shared/services/notification.service';
 import { ServicesModule } from '../../../shared/services/services.module';
@@ -19,23 +22,30 @@ describe('RbdSnapshotListComponent', () => {
   let component: RbdSnapshotListComponent;
   let fixture: ComponentFixture<RbdSnapshotListComponent>;
 
-  beforeEach(async(() => {
-    TestBed.configureTestingModule({
-      declarations: [ RbdSnapshotListComponent ],
-      imports: [
-        DataTableModule,
-        ComponentsModule,
-        ModalModule.forRoot(),
-        ToastModule.forRoot(),
-        ServicesModule,
-        ApiModule,
-        HttpClientTestingModule,
-        RouterTestingModule
-      ],
-      providers: [ AuthStorageService ]
-    })
-    .compileComponents();
-  }));
+  const fakeAuthStorageService = {
+    isLoggedIn: () => {
+      return true;
+    },
+    getPermissions: () => {
+      return new Permissions({ 'rbd-image': ['read', 'update', 'create', 'delete'] });
+    }
+  };
+
+  configureTestBed({
+    declarations: [RbdSnapshotListComponent],
+    imports: [
+      DataTableModule,
+      ComponentsModule,
+      ModalModule.forRoot(),
+      ToastModule.forRoot(),
+      ServicesModule,
+      ApiModule,
+      HttpClientTestingModule,
+      RouterTestingModule,
+      PipesModule
+    ],
+    providers: [{ provide: AuthStorageService, useValue: fakeAuthStorageService }]
+  });
 
   beforeEach(() => {
     fixture = TestBed.createComponent(RbdSnapshotListComponent);
@@ -51,18 +61,28 @@ describe('RbdSnapshotListComponent', () => {
     let called;
     let rbdService: RbdService;
     let notificationService: NotificationService;
+    let authStorageService: AuthStorageService;
 
     beforeEach(() => {
       called = false;
       rbdService = new RbdService(null);
       notificationService = new NotificationService(null, null);
-      component = new RbdSnapshotListComponent(null, null, null, rbdService, null, null,
-                                               notificationService);
-      spyOn(rbdService, 'deleteSnapshot').and.returnValue(Observable.throw({status: 500}));
+      authStorageService = new AuthStorageService();
+      authStorageService.set('user', { 'rbd-image': ['create', 'read', 'update', 'delete'] });
+      component = new RbdSnapshotListComponent(
+        authStorageService,
+        null,
+        null,
+        null,
+        rbdService,
+        null,
+        notificationService
+      );
+      spyOn(rbdService, 'deleteSnapshot').and.returnValue(observableThrowError({ status: 500 }));
       spyOn(notificationService, 'notifyTask').and.stub();
       component.modalRef = new BsModalRef();
       component.modalRef.content = {
-        stopLoadingSpinner: () => called = true
+        stopLoadingSpinner: () => (called = true)
       };
     });
 

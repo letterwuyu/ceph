@@ -26,9 +26,10 @@ using librbd::util::create_rados_callback;
 
 template <typename I>
 Instances<I>::Instances(Threads<I> *threads, librados::IoCtx &ioctx,
+                        const std::string& instance_id,
                         instances::Listener& listener) :
-  m_threads(threads), m_ioctx(ioctx), m_listener(listener),
-  m_cct(reinterpret_cast<CephContext *>(ioctx.cct())),
+  m_threads(threads), m_ioctx(ioctx), m_instance_id(instance_id),
+  m_listener(listener), m_cct(reinterpret_cast<CephContext *>(ioctx.cct())),
   m_lock("rbd::mirror::Instances " + ioctx.get_pool_name()) {
 }
 
@@ -38,7 +39,7 @@ Instances<I>::~Instances() {
 
 template <typename I>
 void Instances<I>::init(Context *on_finish) {
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   Mutex::Locker locker(m_lock);
   assert(m_on_finish == nullptr);
@@ -48,7 +49,7 @@ void Instances<I>::init(Context *on_finish) {
 
 template <typename I>
 void Instances<I>::shut_down(Context *on_finish) {
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   Mutex::Locker locker(m_lock);
   assert(m_on_finish == nullptr);
@@ -88,11 +89,11 @@ void Instances<I>::unblock_listener() {
 
 template <typename I>
 void Instances<I>::acked(const InstanceIds& instance_ids) {
-  dout(20) << "instance_ids=" << instance_ids << dendl;
+  dout(10) << "instance_ids=" << instance_ids << dendl;
 
   Mutex::Locker locker(m_lock);
   if (m_on_finish != nullptr) {
-    dout(20) << "received on shut down, ignoring" << dendl;
+    dout(5) << "received on shut down, ignoring" << dendl;
     return;
   }
 
@@ -107,7 +108,7 @@ void Instances<I>::handle_acked(const InstanceIds& instance_ids) {
   Mutex::Locker timer_locker(m_threads->timer_lock);
   Mutex::Locker locker(m_lock);
   if (m_on_finish != nullptr) {
-    dout(20) << "handled on shut down, ignoring" << dendl;
+    dout(5) << "handled on shut down, ignoring" << dendl;
     return;
   }
 
@@ -182,7 +183,7 @@ void Instances<I>::list(std::vector<std::string> *instance_ids) {
 
 template <typename I>
 void Instances<I>::get_instances() {
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   assert(m_lock.is_locked());
 
@@ -194,7 +195,7 @@ void Instances<I>::get_instances() {
 
 template <typename I>
 void Instances<I>::handle_get_instances(int r) {
-  dout(20) << "r=" << r << dendl;
+  dout(10) << "r=" << r << dendl;
 
   Context *on_finish = nullptr;
   {
@@ -212,7 +213,7 @@ void Instances<I>::handle_get_instances(int r) {
 
 template <typename I>
 void Instances<I>::wait_for_ops() {
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   assert(m_lock.is_locked());
 
@@ -225,7 +226,7 @@ void Instances<I>::wait_for_ops() {
 
 template <typename I>
 void Instances<I>::handle_wait_for_ops(int r) {
-  dout(20) << "r=" << r << dendl;
+  dout(10) << "r=" << r << dendl;
 
   assert(r == 0);
 
@@ -243,6 +244,9 @@ void Instances<I>::remove_instances(const utime_t& time) {
 
   InstanceIds instance_ids;
   for (auto& instance_pair : m_instances) {
+    if (instance_pair.first == m_instance_id) {
+      continue;
+    }
     auto& instance = instance_pair.second;
     if (instance.state != INSTANCE_STATE_REMOVING &&
         instance.acked_time <= time) {
@@ -252,7 +256,7 @@ void Instances<I>::remove_instances(const utime_t& time) {
   }
   assert(!instance_ids.empty());
 
-  dout(20) << "instance_ids=" << instance_ids << dendl;
+  dout(10) << "instance_ids=" << instance_ids << dendl;
   Context* ctx = new FunctionContext([this, instance_ids](int r) {
       handle_remove_instances(r, instance_ids);
     });
@@ -274,7 +278,7 @@ void Instances<I>::handle_remove_instances(
   Mutex::Locker timer_locker(m_threads->timer_lock);
   Mutex::Locker locker(m_lock);
 
-  dout(20) << "r=" << r << ", instance_ids=" << instance_ids << dendl;
+  dout(10) << "r=" << r << ", instance_ids=" << instance_ids << dendl;
   assert(r == 0);
 
   // fire removed notification now that instaces have been blacklisted
@@ -295,7 +299,7 @@ void Instances<I>::cancel_remove_task() {
     return;
   }
 
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   bool canceled = m_threads->timer->cancel_event(m_timer_task);
   assert(canceled);
@@ -306,17 +310,20 @@ template <typename I>
 void Instances<I>::schedule_remove_task(const utime_t& time) {
   cancel_remove_task();
   if (m_on_finish != nullptr) {
-    dout(20) << "received on shut down, ignoring" << dendl;
+    dout(10) << "received on shut down, ignoring" << dendl;
     return;
   }
 
-  int after = m_cct->_conf->get_val<int64_t>("rbd_mirror_leader_heartbeat_interval") *
-    (1 + m_cct->_conf->get_val<int64_t>("rbd_mirror_leader_max_missed_heartbeats") +
-     m_cct->_conf->get_val<int64_t>("rbd_mirror_leader_max_acquire_attempts_before_break"));
+  int after = m_cct->_conf.get_val<int64_t>("rbd_mirror_leader_heartbeat_interval") *
+    (1 + m_cct->_conf.get_val<int64_t>("rbd_mirror_leader_max_missed_heartbeats") +
+     m_cct->_conf.get_val<int64_t>("rbd_mirror_leader_max_acquire_attempts_before_break"));
 
   bool schedule = false;
   utime_t oldest_time = time;
   for (auto& instance : m_instances) {
+    if (instance.first == m_instance_id) {
+      continue;
+    }
     if (instance.second.state == INSTANCE_STATE_REMOVING) {
       // removal is already in-flight
       continue;
@@ -330,7 +337,7 @@ void Instances<I>::schedule_remove_task(const utime_t& time) {
     return;
   }
 
-  dout(20) << dendl;
+  dout(10) << dendl;
 
   // schedule a time to fire when the oldest instance should be removed
   m_timer_task = new FunctionContext(

@@ -93,7 +93,6 @@ void FSMap::print(ostream& out) const
 
   if (filesystems.empty()) {
     out << "No filesystems configured" << std::endl;
-    return;
   }
 
   for (const auto &fs : filesystems) {
@@ -227,9 +226,8 @@ void FSMap::print_summary(Formatter *f, ostream *out) const
 }
 
 
-void FSMap::create_filesystem(std::string_view name,
-                              int64_t metadata_pool, int64_t data_pool,
-                              uint64_t features)
+std::shared_ptr<Filesystem> FSMap::create_filesystem(std::string_view name,
+    int64_t metadata_pool, int64_t data_pool, uint64_t features)
 {
   auto fs = std::make_shared<Filesystem>();
   fs->mds_map.epoch = epoch;
@@ -259,6 +257,8 @@ void FSMap::create_filesystem(std::string_view name,
   if (filesystems.size() == 1) {
     legacy_client_fscid = fs->fscid;
   }
+
+  return fs;
 }
 
 void FSMap::reset_filesystem(fs_cluster_id_t fscid)
@@ -340,7 +340,7 @@ void FSMap::get_health_checks(health_check_map_t *checks) const
 
     for (const auto &rank : fs->mds_map.failed) {
       const mds_gid_t replacement = find_replacement_for(
-          {fs->fscid, rank}, {}, g_conf->mon_force_standby_active);
+          {fs->fscid, rank}, {}, g_conf()->mon_force_standby_active);
       if (replacement == MDS_GID_NONE) {
         stuck_failed.insert(rank);
       }
@@ -424,7 +424,7 @@ void FSMap::encode(bufferlist& bl, uint64_t features) const
   }
 }
 
-void FSMap::decode(bufferlist::iterator& p)
+void FSMap::decode(bufferlist::const_iterator& p)
 {
   // The highest MDSMap encoding version before we changed the
   // MDSMonitor to store an FSMap instead of an MDSMap was
@@ -470,7 +470,7 @@ void FSMap::decode(bufferlist::iterator& p)
     if (ev >= 3)
       decode(legacy_mds_map.compat, p);
     else
-      legacy_mds_map.compat = get_mdsmap_compat_set_base();
+      legacy_mds_map.compat = MDSMap::get_compat_set_base();
     if (ev < 5) {
       __u32 n;
       decode(n, p);
@@ -627,13 +627,13 @@ void Filesystem::encode(bufferlist& bl, uint64_t features) const
   ENCODE_FINISH(bl);
 }
 
-void Filesystem::decode(bufferlist::iterator& p)
+void Filesystem::decode(bufferlist::const_iterator& p)
 {
   DECODE_START(1, p);
   decode(fscid, p);
   bufferlist mdsmap_bl;
   decode(mdsmap_bl, p);
-  bufferlist::iterator mdsmap_bl_iter = mdsmap_bl.begin();
+  auto mdsmap_bl_iter = mdsmap_bl.cbegin();
   mds_map.decode(mdsmap_bl_iter);
   DECODE_FINISH(p);
 }

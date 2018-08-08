@@ -25,9 +25,9 @@
 
 #include "include/assert.h"
 #include "include/unordered_map.h"
-#include "include/memory.h"
 #include "common/Finisher.h"
 #include "common/RWLock.h"
+#include "common/Throttle.h"
 #include "common/WorkQueue.h"
 #include "os/ObjectStore.h"
 #include "common/perf_counters.h"
@@ -436,7 +436,9 @@ public:
     logger->dump_formatted(f, false);
     f->close_section();
   }
-
+  void get_db_statistics(Formatter *f) override {
+    db->get_statistics(f);
+  }
   int statfs(struct store_statfs_t *buf) override;
 
   CollectionHandle open_collection(const coll_t& c) override;
@@ -629,7 +631,7 @@ private:
   int _omap_rmkeys(TransContext *txc,
 		   CollectionRef& c,
 		   OnodeRef& o,
-		   bufferlist& bl);
+		   const bufferlist& bl);
   int _omap_rmkey_range(TransContext *txc,
 			CollectionRef& c,
 			OnodeRef& o,

@@ -25,7 +25,7 @@
 
 #include "include/types.h"
 #include "include/buffer.h"
-#include "common/Throttle.h"
+#include "common/ThrottleInterface.h"
 #include "common/zipkin_trace.h"
 #include "msg_types.h"
 
@@ -194,6 +194,7 @@
 #define MSG_NOP                   0x607
 
 #define MSG_MON_HEALTH_CHECKS     0x608
+#define MSG_TIMECHECK2            0x609
 
 // *** ceph-mgr <-> OSD/MDS daemons ***
 #define MSG_MGR_OPEN              0x700
@@ -261,7 +262,7 @@ public:
   // zipkin tracing
   ZTracer::Trace trace;
   void encode_trace(bufferlist &bl, uint64_t features) const;
-  void decode_trace(bufferlist::iterator &p, bool create = false);
+  void decode_trace(bufferlist::const_iterator &p, bool create = false);
 
   class CompletionHook : public Context {
   protected:
@@ -282,10 +283,10 @@ protected:
 
   // release our size in bytes back to this throttler when our payload
   // is adjusted or when we are destroyed.
-  Throttle *byte_throttler = nullptr;
+  ThrottleInterface *byte_throttler = nullptr;
 
   // release a count back to this throttler when we are destroyed
-  Throttle *msg_throttler = nullptr;
+  ThrottleInterface *msg_throttler = nullptr;
 
   // keep track of how big this message was when we reserved space in
   // the msgr dispatch_throttler, so that we can properly release it
@@ -332,10 +333,12 @@ public:
   }
   CompletionHook* get_completion_hook() { return completion_hook; }
   void set_completion_hook(CompletionHook *hook) { completion_hook = hook; }
-  void set_byte_throttler(Throttle *t) { byte_throttler = t; }
-  Throttle *get_byte_throttler() { return byte_throttler; }
-  void set_message_throttler(Throttle *t) { msg_throttler = t; }
-  Throttle *get_message_throttler() { return msg_throttler; }
+  void set_byte_throttler(ThrottleInterface *t) {
+    byte_throttler = t;
+  }
+  void set_message_throttler(ThrottleInterface *t) {
+    msg_throttler = t;
+  }
 
   void set_dispatch_throttle_size(uint64_t s) { dispatch_throttle_size = s; }
   uint64_t get_dispatch_throttle_size() const { return dispatch_throttle_size; }
@@ -466,6 +469,11 @@ public:
       return connection->get_peer_addr();
     return entity_addr_t();
   }
+  entity_addrvec_t get_source_addrs() const {
+    if (connection)
+      return connection->get_peer_addrs();
+    return entity_addrvec_t();
+  }
 
   // forwarded?
   entity_inst_t get_orig_source_inst() const {
@@ -476,6 +484,9 @@ public:
   }
   entity_addr_t get_orig_source_addr() const {
     return get_source_addr();
+  }
+  entity_addrvec_t get_orig_source_addrs() const {
+    return get_source_addrs();
   }
 
   // virtual bits
@@ -506,6 +517,6 @@ inline ostream& operator<<(ostream& out, const Message& m) {
 
 extern void encode_message(Message *m, uint64_t features, bufferlist& bl);
 extern Message *decode_message(CephContext *cct, int crcflags,
-                               bufferlist::iterator& bl);
+                               bufferlist::const_iterator& bl);
 
 #endif

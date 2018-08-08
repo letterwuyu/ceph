@@ -443,7 +443,7 @@ void ECBackend::handle_recovery_read_complete(
     ECUtil::HashInfo hinfo(ec_impl->get_chunk_count());
     if (op.obc->obs.oi.size > 0) {
       assert(op.xattrs.count(ECUtil::get_hinfo_key()));
-      bufferlist::iterator bp = op.xattrs[ECUtil::get_hinfo_key()].begin();
+      auto bp = op.xattrs[ECUtil::get_hinfo_key()].cbegin();
       decode(hinfo, bp);
     }
     op.hinfo = unstable_hashinfo_registry.lookup_or_create(hoid, hinfo);
@@ -908,8 +908,11 @@ void ECBackend::handle_sub_write(
   }
   clear_temp_objs(op.temp_removed);
   dout(30) << __func__ << " missing before " << get_parent()->get_log().get_missing().get_items() << dendl;
+  // flag set to true during async recovery
+  bool async = false;
   pg_missing_tracker_t pmissing = get_parent()->get_local_missing();
   if (pmissing.is_missing(op.soid)) {
+    async = true;
     dout(30) << __func__ << " is_missing " << pmissing.is_missing(op.soid) << dendl;
     for (auto &&e: op.log_entries) {
       dout(30) << " add_next_event entry " << e << dendl;
@@ -923,7 +926,8 @@ void ECBackend::handle_sub_write(
     op.trim_to,
     op.roll_forward_to,
     !op.backfill_or_async_recovery,
-    localt);
+    localt,
+    async);
 
   if (!get_parent()->pg_is_undersized() &&
       (unsigned)get_parent()->whoami_shard().shard >=
@@ -1059,6 +1063,8 @@ error:
 	*i, ghobject_t::NO_GEN, shard),
       reply->attrs_read[*i]);
     if (r < 0) {
+      // If we read error, we should not return the attrs too.
+      reply->attrs_read.erase(*i);
       reply->buffers_read.erase(*i);
       reply->errors[*i] = r;
     }
@@ -1255,6 +1261,13 @@ void ECBackend::complete_read_op(ReadOp &rop, RecoveryMessages *m)
       reqiter->second.cb = nullptr;
     }
   }
+  // if the read op is over. clean all the data of this tid.
+  for (set<pg_shard_t>::iterator iter = rop.in_progress.begin();
+    iter != rop.in_progress.end();
+    iter++) {
+    shard_to_read_map[*iter].erase(rop.tid);
+  }
+  rop.in_progress.clear();
   tid_to_read_map.erase(rop.tid);
 }
 
@@ -1749,7 +1762,7 @@ ECUtil::HashInfoRef ECBackend::get_hash_info(
 	}
       }
       if (bl.length() > 0) {
-	bufferlist::iterator bp = bl.begin();
+	auto bp = bl.cbegin();
         try {
 	  decode(hinfo, bp);
         } catch(...) {
@@ -2342,13 +2355,21 @@ int ECBackend::send_all_remaining_reads(
   GenContext<pair<RecoveryMessages *, read_result_t& > &> *c =
     rop.to_read.find(hoid)->second.cb;
 
+  // (Note cuixf) If we need to read attrs and we read failed, try to read again.
+  bool want_attrs =
+    rop.to_read.find(hoid)->second.want_attrs &&
+    (!rop.complete[hoid].attrs || rop.complete[hoid].attrs->empty());
+  if (want_attrs) {
+    dout(10) << __func__ << " want attrs again" << dendl;
+  }
+
   rop.to_read.erase(hoid);
   rop.to_read.insert(make_pair(
       hoid,
       read_request_t(
 	offsets,
 	shards,
-	false,
+	want_attrs,
 	c)));
   do_read_op(rop);
   return 0;
@@ -2397,8 +2418,6 @@ int ECBackend::be_deep_scrub(
 {
   dout(10) << __func__ << " " << poid << " pos " << pos << dendl;
   int r;
-  bool skip_data_digest = store->has_builtin_csum() &&
-    g_conf->osd_skip_data_digest;
 
   uint32_t fadvise_flags = CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL |
                            CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
@@ -2439,7 +2458,7 @@ int ECBackend::be_deep_scrub(
     o.read_error = true;
     return 0;
   }
-  if (r > 0 && !skip_data_digest) {
+  if (r > 0) {
     pos.data_hash << bl;
   }
   pos.data_pos += r;
@@ -2465,8 +2484,7 @@ int ECBackend::be_deep_scrub(
 	return 0;
       }
 
-      if (!skip_data_digest &&
-          hinfo->get_chunk_hash(get_parent()->whoami_shard().shard) !=
+      if (hinfo->get_chunk_hash(get_parent()->whoami_shard().shard) !=
 	  pos.data_hash.digest()) {
 	dout(0) << "_scan_list  " << poid << " got incorrect hash on read 0x"
 		<< std::hex << pos.data_hash.digest() << " !=  expected 0x"

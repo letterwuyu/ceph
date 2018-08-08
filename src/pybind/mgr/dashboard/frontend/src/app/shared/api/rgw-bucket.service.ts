@@ -1,72 +1,84 @@
-import { HttpClient, HttpParams, HttpResponse } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable } from '@angular/core';
-import 'rxjs/add/observable/forkJoin';
-import 'rxjs/add/observable/of';
-import { Observable } from 'rxjs/Observable';
 
 import * as _ from 'lodash';
+import { forkJoin as observableForkJoin, of as observableOf } from 'rxjs';
+import { mergeMap } from 'rxjs/operators';
 
-@Injectable()
+import { cdEncode } from '../decorators/cd-encode';
+import { ApiModule } from './api.module';
+
+@cdEncode
+@Injectable({
+  providedIn: ApiModule
+})
 export class RgwBucketService {
+  private url = 'api/rgw/bucket';
 
-  private url = '/api/rgw/proxy/bucket';
+  constructor(private http: HttpClient) {}
 
-  constructor(private http: HttpClient) { }
-
+  /**
+   * Get the list of buckets.
+   * @return {Observable<Object[]>}
+   */
   list() {
-    return this.http.get(this.url)
-      .flatMap((buckets: string[]) => {
+    return this.enumerate().pipe(
+      mergeMap((buckets: string[]) => {
         if (buckets.length > 0) {
-          return Observable.forkJoin(
+          return observableForkJoin(
             buckets.map((bucket: string) => {
               return this.get(bucket);
             })
           );
         }
-        return Observable.of([]);
-      });
+        return observableOf([]);
+      })
+    );
+  }
+
+  /**
+   * Get the list of bucket names.
+   * @return {Observable<string[]>}
+   */
+  enumerate() {
+    return this.http.get(this.url);
   }
 
   get(bucket: string) {
-    let params = new HttpParams();
-    params = params.append('bucket', bucket);
-    return this.http.get(this.url, { params: params });
+    return this.http.get(`${this.url}/${bucket}`);
   }
 
   create(bucket: string, uid: string) {
-    const body = JSON.stringify({
-      'bucket': bucket,
-      'uid': uid
-    });
-    return this.http.post(`/api/rgw/bucket`, body);
-  }
-
-  update(bucketId: string, bucket: string, uid: string) {
     let params = new HttpParams();
     params = params.append('bucket', bucket);
-    params = params.append('bucket-id', bucketId as string);
     params = params.append('uid', uid);
-    return this.http.put(this.url, null, { params: params });
+    return this.http.post(this.url, null, { params: params });
+  }
+
+  update(bucket: string, bucketId: string, uid: string) {
+    let params = new HttpParams();
+    params = params.append('bucket_id', bucketId);
+    params = params.append('uid', uid);
+    return this.http.put(`${this.url}/${bucket}`, null, { params: params });
   }
 
   delete(bucket: string, purgeObjects = true) {
     let params = new HttpParams();
-    params = params.append('bucket', bucket);
-    params = params.append('purge-objects', purgeObjects ? 'true' : 'false');
-    return this.http.delete(this.url, { params: params });
+    params = params.append('purge_objects', purgeObjects ? 'true' : 'false');
+    return this.http.delete(`${this.url}/${bucket}`, { params: params });
   }
 
-  find(bucket: string) {
-    let params = new HttpParams();
-    params = params.append('bucket', bucket);
-    return this.http.get(this.url, { params: params })
-      .flatMap((resp: object | null) => {
-        // Make sure we have received valid data.
-        if ((null === resp) || (!_.isObjectLike(resp))) {
-          return Observable.of([]);
-        }
-        // Return an array to be able to support wildcard searching someday.
-        return Observable.of([resp]);
-      });
+  /**
+   * Check if the specified bucket exists.
+   * @param {string} uid The bucket name to check.
+   * @return {Observable<boolean>}
+   */
+  exists(bucket: string) {
+    return this.enumerate().pipe(
+      mergeMap((resp: string[]) => {
+        const index = _.indexOf(resp, bucket);
+        return observableOf(-1 !== index);
+      })
+    );
   }
 }

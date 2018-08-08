@@ -26,7 +26,7 @@ using util::create_context_callback;
 class ImageUpdateWatchers {
 public:
 
-  ImageUpdateWatchers(CephContext *cct) : m_cct(cct),
+  explicit ImageUpdateWatchers(CephContext *cct) : m_cct(cct),
     m_lock(util::unique_lock_name("librbd::ImageUpdateWatchers::m_lock", this)) {
   }
 
@@ -216,7 +216,7 @@ private:
       ThreadPoolSingleton>("librbd::ImageUpdateWatchers::thread_pool",
 			   false, m_cct);
     m_work_queue = new ContextWQ("librbd::ImageUpdateWatchers::op_work_queue",
-				 m_cct->_conf->get_val<int64_t>("rbd_op_thread_timeout"),
+				 m_cct->_conf.get_val<int64_t>("rbd_op_thread_timeout"),
 				 &thread_pool);
   }
 

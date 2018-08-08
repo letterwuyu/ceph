@@ -14,7 +14,6 @@
 #include <map>
 #include <string>
 #include <memory>
-#include "include/memory.h"
 #include <boost/scoped_ptr.hpp>
 #include "include/encoding.h"
 #include "include/btree_map.h"
@@ -98,7 +97,7 @@ public:
     void clear() {
       ops.clear();
     }
-    MDBTransactionImpl(MemDB* _db) :m_db(_db)
+    explicit MDBTransactionImpl(MemDB* _db) :m_db(_db)
     {
       ops.clear();
     }

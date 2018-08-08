@@ -183,7 +183,7 @@ struct GetTagsRequest {
     }
 
     librbd::journal::ClientData client_data;
-    bufferlist::iterator bl_it = client->data.begin();
+    auto bl_it = client->data.cbegin();
     try {
       decode(client_data, bl_it);
     } catch (const buffer::error &err) {
@@ -340,7 +340,7 @@ Journal<I>::Journal(I &image_ctx)
     &cct->lookup_or_create_singleton_object<ThreadPoolSingleton>(
       "librbd::journal::thread_pool", false, cct);
   m_work_queue = new ContextWQ("librbd::journal::work_queue",
-                               cct->_conf->get_val<int64_t>("rbd_op_thread_timeout"),
+                               cct->_conf.get_val<int64_t>("rbd_op_thread_timeout"),
                                thread_pool_singleton);
   ImageCtx::get_timer_instance(cct, &m_timer, &m_timer_lock);
 }
@@ -446,7 +446,7 @@ template <typename I>
 void Journal<I>::get_tag_owner(IoCtx& io_ctx, std::string& image_id,
                                std::string *mirror_uuid,
                                ContextWQ *op_work_queue, Context *on_finish) {
-  CephContext *cct = (CephContext *)io_ctx.cct();
+  CephContext *cct = static_cast<CephContext *>(io_ctx.cct());
   ldout(cct, 20) << __func__ << dendl;
 
   auto ctx = new C_GetTagOwner(io_ctx, image_id, mirror_uuid, on_finish);
@@ -1220,7 +1220,7 @@ void Journal<I>::handle_replay_ready() {
   }
 
   bufferlist data = replay_entry.get_data();
-  bufferlist::iterator it = data.begin();
+  auto it = data.cbegin();
 
   journal::EventEntry event_entry;
   int r = m_journal_replay->decode(&it, &event_entry);
@@ -1590,7 +1590,7 @@ int Journal<I>::check_resync_requested(bool *do_resync) {
   }
 
   librbd::journal::ClientData client_data;
-  bufferlist::iterator bl_it = client.data.begin();
+  auto bl_it = client.data.cbegin();
   try {
     decode(client_data, bl_it);
   } catch (const buffer::error &err) {
@@ -1620,7 +1620,7 @@ struct C_RefreshTags : public Context {
   uint64_t tag_tid = 0;
   journal::TagData tag_data;
 
-  C_RefreshTags(util::AsyncOpTracker &async_op_tracker)
+  explicit C_RefreshTags(util::AsyncOpTracker &async_op_tracker)
     : async_op_tracker(async_op_tracker),
       lock("librbd::Journal::C_RefreshTags::lock") {
     async_op_tracker.start_op();

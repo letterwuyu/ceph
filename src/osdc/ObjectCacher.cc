@@ -609,7 +609,8 @@ void ObjectCacher::Object::discard(loff_t off, loff_t len,
       bh->bl.clear();
       bh->set_nocache(true);
       oc->mark_zero(bh);
-      return;
+      // we should mark all Rx bh to zero
+      continue;
     } else {
       assert(bh->waitfor_read.empty());
     }
@@ -679,9 +680,9 @@ void ObjectCacher::perf_start()
   plb.add_u64_counter(l_objectcacher_cache_ops_miss,
 		      "cache_ops_miss", "Miss operations");
   plb.add_u64_counter(l_objectcacher_cache_bytes_hit,
-		      "cache_bytes_hit", "Hit data", NULL, 0, unit_t(BYTES));
+		      "cache_bytes_hit", "Hit data", NULL, 0, unit_t(UNIT_BYTES));
   plb.add_u64_counter(l_objectcacher_cache_bytes_miss,
-		      "cache_bytes_miss", "Miss data", NULL, 0, unit_t(BYTES));
+		      "cache_bytes_miss", "Miss data", NULL, 0, unit_t(UNIT_BYTES));
   plb.add_u64_counter(l_objectcacher_data_read,
 		      "data_read", "Read data");
   plb.add_u64_counter(l_objectcacher_data_written,
@@ -695,7 +696,7 @@ void ObjectCacher::perf_start()
 		      "Write operations, delayed due to dirty limits");
   plb.add_u64_counter(l_objectcacher_write_bytes_blocked,
 		      "write_bytes_blocked",
-		      "Write data blocked on dirty limit", NULL, 0, unit_t(BYTES));
+		      "Write data blocked on dirty limit", NULL, 0, unit_t(UNIT_BYTES));
   plb.add_time(l_objectcacher_write_time_blocked, "write_time_blocked",
 	       "Time spent blocking a write due to dirty limits");
 
@@ -1728,20 +1729,18 @@ int ObjectCacher::writex(OSDWrite *wr, ObjectSet *oset, Context *onfreespace,
       ldout(cct, 10) << "writex writing " << f_it->first << "~"
 		     << f_it->second << " into " << *bh << " at " << opos
 		     << dendl;
-      uint64_t bhoff = bh->start() - opos;
+      uint64_t bhoff = opos - bh->start();
       assert(f_it->second <= bh->length() - bhoff);
 
       // get the frag we're mapping in
       bufferlist frag;
-      frag.substr_of(wr->bl,
-		     f_it->first, f_it->second);
+      frag.substr_of(wr->bl, f_it->first, f_it->second);
 
       // keep anything left of bhoff
-      bufferlist newbl;
-      if (bhoff)
-	newbl.substr_of(bh->bl, 0, bhoff);
-      newbl.claim_append(frag);
-      bh->bl.swap(newbl);
+      if (!bhoff)
+        bh->bl.swap(frag);
+      else
+        bh->bl.claim_append(frag);
 
       opos += f_it->second;
     }
@@ -1850,7 +1849,7 @@ int ObjectCacher::_wait_for_write(OSDWrite *wr, uint64_t len, ObjectSet *oset,
   assert(trace != nullptr);
   int ret = 0;
 
-  if (max_dirty > 0) {
+  if (max_dirty > 0 && !(wr->fadvise_flags & LIBRADOS_OP_FLAG_FADVISE_FUA)) {
     if (block_writes_upfront) {
       maybe_wait_for_writeback(len, trace);
       if (onfreespace)
@@ -2488,9 +2487,14 @@ void ObjectCacher::discard_writeback(ObjectSet *oset,
   _discard(oset, exls, &gather);
 
   if (gather.has_subs()) {
+    bool flushed = was_dirty && oset->dirty_or_tx == 0;
     gather.set_finisher(new FunctionContext(
-      [this, oset, was_dirty, on_finish](int) {
-        _discard_finish(oset, was_dirty, on_finish);
+      [this, oset, flushed, on_finish](int) {
+	assert(lock.is_locked());
+	if (flushed && flush_set_callback)
+	  flush_set_callback(flush_set_callback_arg, oset);
+	if (on_finish)
+	  on_finish->complete(0);
       }));
     gather.activate();
     return;

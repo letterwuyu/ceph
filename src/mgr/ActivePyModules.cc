@@ -191,9 +191,9 @@ PyObject *ActivePyModules::get_python(const std::string &what)
   } else if (what.substr(0, 6) == "config") {
     PyFormatter f;
     if (what == "config_options") {
-      g_conf->config_options(&f);  
+      g_conf().config_options(&f);
     } else if (what == "config") {
-      g_conf->show_config(&f);
+      g_conf().show_config(&f);
     }
     return f.get();
   } else if (what == "mon_map") {
@@ -265,6 +265,9 @@ PyObject *ActivePyModules::get_python(const std::string &what)
             f.dump_int(i.first.c_str(), i.second);
           }
           f.close_section();
+          f.open_object_section("pg_stats_sum");
+          pg_map.pg_sum.dump(&f);
+          f.close_section();
         }
     );
     return f.get();
@@ -278,11 +281,27 @@ PyObject *ActivePyModules::get_python(const std::string &what)
     return f.get();
   } else if (what == "pg_dump") {
     PyFormatter f;
-        cluster_state.with_pgmap(
-        [&f](const PGMap &pg_map) {
-	  pg_map.dump(&f);
-        }
+    cluster_state.with_pgmap(
+      [&f](const PGMap &pg_map) {
+	pg_map.dump(&f);
+      }
     );
+    return f.get();
+  } else if (what == "devices") {
+    PyFormatter f;
+    f.open_array_section("devices");
+    daemon_state.with_devices([&f] (const DeviceState& dev) {
+	f.dump_object("device", dev);
+      });
+    f.close_section();
+    return f.get();
+  } else if (what.size() > 7 &&
+	     what.substr(0, 7) == "device ") {
+    string devid = what.substr(7);
+    PyFormatter f;
+    daemon_state.with_device(devid, [&f] (const DeviceState& dev) {
+	f.dump_object("device", dev);
+      });
     return f.get();
   } else if (what == "io_rate") {
     PyFormatter f;
@@ -356,16 +375,17 @@ int ActivePyModules::start_one(PyModuleRef py_module)
   assert(modules.count(py_module->get_name()) == 0);
 
   modules[py_module->get_name()].reset(new ActivePyModule(py_module, clog));
+  auto active_module = modules.at(py_module->get_name()).get();
 
-  int r = modules[py_module->get_name()]->load(this);
+  int r = active_module->load(this);
   if (r != 0) {
+    // the class instance wasn't created... remove it from the set of activated
+    // modules so commands and notifications aren't delivered.
+    modules.erase(py_module->get_name());
     return r;
   } else {
     dout(4) << "Starting thread for " << py_module->get_name() << dendl;
-    // Giving Thread the module's module_name member as its
-    // char* thread name: thread must not outlive module class lifetime.
-    modules[py_module->get_name()]->thread.create(
-        py_module->get_name().c_str());
+    active_module->thread.create(active_module->get_thread_name());
 
     return 0;
   }
@@ -454,6 +474,19 @@ bool ActivePyModules::get_store(const std::string &module_name,
   } else {
     return false;
   }
+}
+
+PyObject *ActivePyModules::dispatch_remote(
+    const std::string &other_module,
+    const std::string &method,
+    PyObject *args,
+    PyObject *kwargs,
+    std::string *err)
+{
+  auto mod_iter = modules.find(other_module);
+  assert(mod_iter != modules.end());
+
+  return mod_iter->second->dispatch_remote(method, args, kwargs, err);
 }
 
 bool ActivePyModules::get_config(const std::string &module_name,
@@ -586,13 +619,24 @@ PyObject* ActivePyModules::get_counter_python(
     Mutex::Locker l2(metadata->lock);
     if (metadata->perf_counters.instances.count(path)) {
       auto counter_instance = metadata->perf_counters.instances.at(path);
-      const auto &data = counter_instance.get_data();
-      for (const auto &datapoint : data) {
-        f.open_array_section("datapoint");
-        f.dump_unsigned("t", datapoint.t.sec());
-        f.dump_unsigned("v", datapoint.v);
-        f.close_section();
-
+      auto counter_type = metadata->perf_counters.types.at(path);
+      if (counter_type.type & PERFCOUNTER_LONGRUNAVG) {
+        const auto &avg_data = counter_instance.get_data_avg();
+        for (const auto &datapoint : avg_data) {
+          f.open_array_section("datapoint");
+          f.dump_unsigned("t", datapoint.t.sec());
+          f.dump_unsigned("s", datapoint.s);
+          f.dump_unsigned("c", datapoint.c);
+          f.close_section();
+        }
+      } else {
+        const auto &data = counter_instance.get_data();
+        for (const auto &datapoint : data) {
+          f.open_array_section("datapoint");
+          f.dump_unsigned("t", datapoint.t.sec());
+          f.dump_unsigned("v", datapoint.v);
+          f.close_section();
+        }
       }
     } else {
       dout(4) << "Missing counter: '" << path << "' ("
@@ -752,6 +796,7 @@ void ActivePyModules::set_health_checks(const std::string& module_name,
 int ActivePyModules::handle_command(
   std::string const &module_name,
   const cmdmap_t &cmdmap,
+  const bufferlist &inbuf,
   std::stringstream *ds,
   std::stringstream *ss)
 {
@@ -763,7 +808,7 @@ int ActivePyModules::handle_command(
   }
 
   lock.Unlock();
-  return mod_iter->second->handle_command(cmdmap, ds, ss);
+  return mod_iter->second->handle_command(cmdmap, inbuf, ds, ss);
 }
 
 void ActivePyModules::get_health_checks(health_check_map_t *checks)
@@ -783,4 +828,5 @@ void ActivePyModules::set_uri(const std::string& module_name,
 
   modules[module_name]->set_uri(uri);
 }
+
 
