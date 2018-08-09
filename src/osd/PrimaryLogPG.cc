@@ -6564,6 +6564,8 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  trim.insert(op.extent.offset, oi.size-op.extent.offset);
 	  ctx->modified_ranges.union_of(trim);
 	  ctx->clean_regions.mark_data_region_dirty(op.extent.offset, oi.size - op.extent.offset);
+	} else {
+	  ctx->clean_regions.mark_data_region_dirty(oi.size, op.extent.offset - oi.size);
 	}
 	if (op.extent.offset != oi.size) {
           truncate_update_size_and_usage(ctx->delta_stats,
